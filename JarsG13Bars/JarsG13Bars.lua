@@ -10,7 +10,7 @@ local LibKeyBound = LibStub("LibKeyBound-1.0")
 -- Configuration
 local PRIMARY_SIZE = 80      -- 100% size for 3x2 grid
 local SIDE_SIZE = 52         -- 66% of primary (0.66 * 80 = 52.8 ≈ 52)
-local BOTTOM_SIZE = 20       -- 25% of primary (0.25 * 80 = 20)
+local BOTTOM_SIZE = 40       -- 50% of primary (doubled from 20)
 local PADDING = 6            -- Padding between buttons
 local SNAP_DISTANCE = 20     -- Distance to snap to center
 
@@ -386,15 +386,22 @@ local function CreateActionButton(parent, index, size)
     button.cooldown:SetAllPoints(button)
     button.cooldown:SetDrawEdge(false)
     
-    -- Count text
+    -- Count text - MASSIVE and center-justified
     if button.Count then
+        button.Count:ClearAllPoints()
+        button.Count:SetPoint("CENTER", button, "CENTER", 0, 0)
+        button.Count:SetJustifyH("CENTER")
+        button.Count:SetJustifyV("MIDDLE")
+        button.Count:SetWordWrap(false)
+        button.Count:SetWidth(0)  -- No width restriction
+        button.Count:SetHeight(0) -- No height restriction
         local fontFace, _, fontFlags = button.Count:GetFont()
         if fontFace then
-            button.Count:SetFont(fontFace, math.max(10, size * 0.25), fontFlags)
+            button.Count:SetFont(fontFace, math.max(24, size * 0.7), fontFlags or "OUTLINE")
         end
     end
     
-    -- Hotkey text
+    -- Hotkey text - Keep small
     if button.HotKey then
         local fontFace, _, fontFlags = button.HotKey:GetFont()
         if fontFace then
@@ -598,9 +605,12 @@ local function UpdateButtons()
     end
 end
 
+-- Forward declaration for CreateConfigWindow
+local CreateConfigWindow
+
 -- Event handler
 local eventFrame = CreateFrame("Frame")
-eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 eventFrame:RegisterEvent("ACTIONBAR_UPDATE_COOLDOWN")
@@ -614,18 +624,27 @@ eventFrame:RegisterEvent("PLAYER_ENTER_COMBAT")
 eventFrame:RegisterEvent("PLAYER_LEAVE_COMBAT")
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
-    if event == "PLAYER_LOGIN" then
-        InitDB()
-        HideDefaultBars()
-        mainFrame = CreateMainFrame()
-        
-        -- Setup override bindings and update keybinds after a delay to ensure buttons are ready
-        C_Timer.After(1, function()
-            UpdateOverrideBindings()
-            UpdateKeybinds()
-        end)
-        
-        print("|cff00ff00Jar's G13 Action Bars|r loaded. Type |cff00ffff/jg13|r to configure.")
+    if event == "ADDON_LOADED" then
+        local addonName = ...
+        if addonName == "JarsG13Bars" then
+            InitDB()
+            HideDefaultBars()
+            mainFrame = CreateMainFrame()
+            
+            print("DEBUG: About to call CreateConfigWindow()")
+            CreateConfigWindow()
+            print("DEBUG: CreateConfigWindow() returned, frame is:", _G["JG13_ConfigFrame"])
+            
+            -- Setup override bindings and update keybinds after a delay to ensure buttons are ready
+            C_Timer.After(1, function()
+                UpdateOverrideBindings()
+                UpdateKeybinds()
+            end)
+            
+            print("|cff00ff00Jar's G13 Action Bars|r loaded. Type |cff00ffff/jg13|r to configure.")
+            
+            self:UnregisterEvent("ADDON_LOADED")
+        end
         
     elseif event == "PLAYER_ENTERING_WORLD" then
         HideDefaultBars()
@@ -710,9 +729,8 @@ end
 
 -- Create config window
 local configFrame
-local function CreateConfigWindow()
+CreateConfigWindow = function()
     if configFrame then
-        configFrame:Show()
         return
     end
     
@@ -849,7 +867,7 @@ local function CreateConfigWindow()
     -- Action Bar Hide Checkboxes
     -- Show Keybinds checkbox
     local keybindsCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
-    keybindsCheck:SetPoint("TOPLEFT", keybindBtn, "BOTTOMLEFT", -130, -10)
+    keybindsCheck:SetPoint("TOPLEFT", keybindBtn, "BOTTOMLEFT", -110, -10)
     keybindsCheck.text = keybindsCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     keybindsCheck.text:SetPoint("LEFT", keybindsCheck, "RIGHT", 5, 0)
     keybindsCheck.text:SetText("Show Keybinds")
@@ -860,7 +878,7 @@ local function CreateConfigWindow()
     end)
     
     local barLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    barLabel:SetPoint("TOPLEFT", keybindsCheck, "BOTTOMLEFT", 0, -20)
+    barLabel:SetPoint("TOPLEFT", keybindsCheck, "BOTTOMLEFT", 20, -20)
     barLabel:SetText("Hide Blizzard Action Bars:")
     
     local barNames = {
@@ -877,7 +895,7 @@ local function CreateConfigWindow()
     local yOffset = -50
     for i, barInfo in ipairs(barNames) do
         local check = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
-        check:SetPoint("TOPLEFT", barLabel, "BOTTOMLEFT", 0 + ((i-1) % 2) * 200, -10 - math.floor((i-1) / 2) * 30)
+        check:SetPoint("TOPLEFT", barLabel, "BOTTOMLEFT", 20 + ((i-1) % 2) * 200, -10 - math.floor((i-1) / 2) * 30)
         check.text = check:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         check.text:SetPoint("LEFT", check, "RIGHT", 5, 0)
         check.text:SetText(barInfo.label)
@@ -917,14 +935,6 @@ SlashCmdList["JG13"] = function(msg)
         return
     end
     
-    -- Open config window
-    if not configFrame then
-        CreateConfigWindow()
-    end
-    
-    if configFrame:IsShown() then
-        configFrame:Hide()
-    else
-        configFrame:Show()
-    end
+    -- Toggle config window
+    configFrame:SetShown(not configFrame:IsShown())
 end
