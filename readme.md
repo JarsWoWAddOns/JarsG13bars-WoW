@@ -26,4 +26,6 @@ This is 100% a pet project for a very specific use-case. BUT, it does also doubl
 
 Again, this is locked to the center of the screen, but you can use the slider to move it along the vertical axis. 
 
+## Notes:
 
+Mounting a, well, mount swaps to Action ar Page 6. So you will want to set your flying controls to this action set. 
