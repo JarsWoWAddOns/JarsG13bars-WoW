@@ -57,6 +57,9 @@ ButtonController:SetScript("OnUpdate", function(self, elapsed)
 end)
 
 ButtonController:SetScript("OnEvent", function(self, event, slot)
+    -- Safety check - don't run if buttons aren't created yet
+    if not ActionButton_Update then return end
+    
     if event == "ACTIONBAR_SLOT_CHANGED" then
         if slot == 0 or slot == nil then
             for button in pairs(self.buttons) do
