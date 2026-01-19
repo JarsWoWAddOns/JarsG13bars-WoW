@@ -4,7 +4,7 @@ This is a bespoke action bar layout for users of the Logitech G13.
 
 It of course can be used as a standard actiobar addon, but the layout has specific emphasis in how the action buttons are laid out. 
 
-The view is staticcally set for:
+The view is statically set for:
 
 <img width="482" height="218" alt="image" src="https://github.com/user-attachments/assets/92b25137-35bc-43d0-9020-16acee7fe0fa" />
 
