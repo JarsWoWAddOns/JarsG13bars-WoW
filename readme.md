@@ -20,7 +20,7 @@ This is 100% a pet project for a very specific use-case. BUT, it does also doubl
 
 ## Configuration
 
-/jg13 will open a configuration screen. 
+`/jg13` will open a configuration screen. 
 
 <img width="482" height="827" alt="image" src="https://github.com/user-attachments/assets/33618a7d-d536-4c10-b1ca-b2efbdc0ebab" />
 
