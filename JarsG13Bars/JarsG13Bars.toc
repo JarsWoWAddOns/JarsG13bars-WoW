@@ -1,0 +1,10 @@
+## Interface: 120001
+## Title: Jar's G13 Action Bars
+## Notes: Custom action bar layout for Logitech G13 gaming keypad
+## Author: Jar
+## Version: 1.0
+## SavedVariables: JarsG13BarsDB
+
+Libs\LibKeyBound-1.0\lib.xml
+
+JarsG13Bars.lua
