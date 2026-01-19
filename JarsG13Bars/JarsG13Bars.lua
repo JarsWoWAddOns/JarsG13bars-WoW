@@ -20,6 +20,79 @@ local buttons = {}
 local UIHider -- Hidden frame for hiding Blizzard bars
 local updateThrottle = 0 -- Throttle for ActionButton updates
 
+-- Button Controller - centralized button update system
+local ButtonController = CreateFrame("Frame")
+ButtonController.buttons = {}
+ButtonController.elapsed = 0
+ButtonController:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+ButtonController:RegisterEvent("SPELL_UPDATE_ICON")
+ButtonController:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+ButtonController:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
+ButtonController:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+
+-- OnUpdate for aggressive icon polling
+ButtonController:SetScript("OnUpdate", function(self, elapsed)
+    self.elapsed = self.elapsed + elapsed
+    if self.elapsed >= 0.5 then  -- Update every 0.5 seconds
+        self.elapsed = 0
+        for button in pairs(self.buttons) do
+            local texture = GetActionTexture(button.action)
+            if button.icon then
+                if texture then
+                    button.icon:SetTexture(texture)
+                    button.icon:SetDesaturated(false)
+                    button.icon:SetVertexColor(1, 1, 1)
+                    button.icon:Show()
+                else
+                    button.icon:SetTexture(nil)
+                    button.icon:Hide()
+                end
+            end
+            -- Update usability (removes gray/desaturated state)
+            if ActionButton_UpdateUsable then
+                ActionButton_UpdateUsable(button)
+            end
+        end
+    end
+end)
+
+ButtonController:SetScript("OnEvent", function(self, event, slot)
+    if event == "ACTIONBAR_SLOT_CHANGED" then
+        if slot == 0 or slot == nil then
+            for button in pairs(self.buttons) do
+                -- Force icon texture refresh
+                local texture = GetActionTexture(button.action)
+                if button.icon and texture then
+                    button.icon:SetTexture(texture)
+                    button.icon:Show()
+                end
+                ActionButton_Update(button)
+            end
+        else
+            for button in pairs(self.buttons) do
+                if button.action == slot then
+                    local texture = GetActionTexture(button.action)
+                    if button.icon and texture then
+                        button.icon:SetTexture(texture)
+                        button.icon:Show()
+                    end
+                    ActionButton_Update(button)
+                end
+            end
+        end
+    else
+        -- For icon changes, force texture refresh on all buttons
+        for button in pairs(self.buttons) do
+            local texture = GetActionTexture(button.action)
+            if button.icon and texture then
+                button.icon:SetTexture(texture)
+                button.icon:Show()
+            end
+            ActionButton_Update(button)
+        end
+    end
+end)
+
 -- Initialize saved variables
 local function InitDB()
     if not JarsG13BarsDB then
@@ -74,17 +147,10 @@ local function HideDefaultBars()
         UIHider:Hide()
     end
     
-    -- Configurable action bars
+    -- Only manage the main action bar - other bars handled by in-game UI
     local configurableBars = {
         "MainMenuBar",        -- <= 11.2.5
         "MainActionBar",      -- >= 12.0
-        "MultiBarBottomLeft", 
-        "MultiBarBottomRight",
-        "MultiBarRight",
-        "MultiBarLeft",
-        "MultiBar5",
-        "MultiBar6", 
-        "MultiBar7",
     }
     
     for _, barName in ipairs(configurableBars) do
@@ -123,62 +189,6 @@ local function HideDefaultBars()
                 if barName == "MainMenuBar" or barName == "MainActionBar" then
                     for i = 1, 12 do
                         local button = _G["ActionButton" .. i]
-                        if button then
-                            button:Hide()
-                            button:SetAttribute("statehidden", true)
-                        end
-                    end
-                elseif barName == "MultiBarBottomLeft" then
-                    for i = 1, 12 do
-                        local button = _G["MultiBarBottomLeftButton" .. i]
-                        if button then
-                            button:Hide()
-                            button:SetAttribute("statehidden", true)
-                        end
-                    end
-                elseif barName == "MultiBarBottomRight" then
-                    for i = 1, 12 do
-                        local button = _G["MultiBarBottomRightButton" .. i]
-                        if button then
-                            button:Hide()
-                            button:SetAttribute("statehidden", true)
-                        end
-                    end
-                elseif barName == "MultiBarRight" then
-                    for i = 1, 12 do
-                        local button = _G["MultiBarRightButton" .. i]
-                        if button then
-                            button:Hide()
-                            button:SetAttribute("statehidden", true)
-                        end
-                    end
-                elseif barName == "MultiBarLeft" then
-                    for i = 1, 12 do
-                        local button = _G["MultiBarLeftButton" .. i]
-                        if button then
-                            button:Hide()
-                            button:SetAttribute("statehidden", true)
-                        end
-                    end
-                elseif barName == "MultiBar5" then
-                    for i = 1, 12 do
-                        local button = _G["MultiBar5Button" .. i]
-                        if button then
-                            button:Hide()
-                            button:SetAttribute("statehidden", true)
-                        end
-                    end
-                elseif barName == "MultiBar6" then
-                    for i = 1, 12 do
-                        local button = _G["MultiBar6Button" .. i]
-                        if button then
-                            button:Hide()
-                            button:SetAttribute("statehidden", true)
-                        end
-                    end
-                elseif barName == "MultiBar7" then
-                    for i = 1, 12 do
-                        local button = _G["MultiBar7Button" .. i]
                         if button then
                             button:Hide()
                             button:SetAttribute("statehidden", true)
@@ -228,9 +238,9 @@ local function UpdateKeybinds()
     local show = JarsG13BarsDB.showKeybinds
     for i = 1, 24 do
         local button = _G["JG13_Button" .. i]
-        if button then
-            -- Update hotkey text from keybindings
-            if button.HotKey then
+        if button and button.HotKey then
+            if show then
+                -- Only update keybind text when showing
                 local command
                 if i <= 12 then
                     command = "ACTIONBUTTON" .. i
@@ -240,20 +250,22 @@ local function UpdateKeybinds()
                 
                 if command then
                     local key = GetBindingKey(command)
-                    if key then
-                        button.HotKey:SetText(GetBindingText(key, "KEY_", 1))
+                    if key and key ~= "" then
+                        local bindingText = GetBindingText(key, "KEY_", 1)
+                        if bindingText and bindingText ~= "" and bindingText:byte() > 31 then
+                            button.HotKey:SetText(bindingText)
+                        else
+                            button.HotKey:SetText("")
+                        end
                     else
                         button.HotKey:SetText("")
                     end
                 end
-            end
-            -- Show or hide the hotkey
-            if button.HotKey then
-                if show then
-                    button.HotKey:Show()
-                else
-                    button.HotKey:Hide()
-                end
+                button.HotKey:Show()
+            else
+                -- When hiding, clear text and hide
+                button.HotKey:SetText("")
+                button.HotKey:Hide()
             end
         end
     end
@@ -293,6 +305,7 @@ local function CreateActionButton(parent, index, size)
     local button = CreateFrame("CheckButton", "JG13_Button" .. index, parent, "ActionBarButtonTemplate")
     button:SetSize(size, size)
     button.action = index
+    button.baseAction = index  -- Store the base action for reference
     
     -- Setup action button
     button:SetAttribute("type", "action")
@@ -300,6 +313,9 @@ local function CreateActionButton(parent, index, size)
     
     -- Register for clicks - "Keybind" is a virtual button used by SetOverrideBindingClick
     button:RegisterForClicks("AnyUp")
+    
+    -- CRITICAL: Register button with the controller for automatic updates
+    ButtonController.buttons[button] = true
     
     -- Set commandName for keybind lookup
     if index <= 12 then
@@ -396,17 +412,33 @@ local function CreateActionButton(parent, index, size)
         button.Count:SetWidth(0)  -- No width restriction
         button.Count:SetHeight(0) -- No height restriction
         local fontFace, _, fontFlags = button.Count:GetFont()
-        if fontFace then
-            button.Count:SetFont(fontFace, math.max(24, size * 0.7), fontFlags or "OUTLINE")
+        -- Use default font if current font is not available
+        if not fontFace or fontFace == "" then
+            fontFace = "Fonts\\FRIZQT__.TTF"
+            fontFlags = "OUTLINE"
         end
+        button.Count:SetFont(fontFace, math.max(24, size * 0.7), fontFlags or "OUTLINE")
     end
     
     -- Hotkey text - Keep small
     if button.HotKey then
         local fontFace, _, fontFlags = button.HotKey:GetFont()
-        if fontFace then
-            button.HotKey:SetFont(fontFace, math.max(8, size * 0.2), fontFlags)
+        -- Use default font if current font is not available
+        if not fontFace or fontFace == "" then
+            fontFace = "Fonts\\FRIZQT__.TTF"
+            fontFlags = "OUTLINE"
         end
+        button.HotKey:SetFont(fontFace, math.max(8, size * 0.2), fontFlags)
+    end
+    
+    -- Name text (macro/spell name)
+    if button.Name then
+        local fontFace, _, fontFlags = button.Name:GetFont()
+        if not fontFace or fontFace == "" then
+            fontFace = "Fonts\\FRIZQT__.TTF"
+            fontFlags = "OUTLINE"
+        end
+        button.Name:SetFont(fontFace, math.max(8, size * 0.15), fontFlags)
     end
     
     -- LibKeyBound support for keybinding
@@ -578,17 +610,47 @@ local function CreateMainFrame()
     return frame
 end
 
+-- Function to get the correct action for a button considering vehicle/override bars
+local function GetButtonAction(baseAction)
+    -- Only apply page switching to buttons 1-12 (main bar)
+    if baseAction > 12 then
+        return baseAction
+    end
+    
+    -- Check for bonus bar (dragonriding, stance bars, etc.)
+    local bonusBar = GetBonusBarOffset()
+    if bonusBar and bonusBar == 5 then
+        -- Dragonriding: switch to page 6 (actions 61-72)
+        return 60 + baseAction
+    end
+    
+    -- Default: return base action
+    return baseAction
+end
+
 -- Update all buttons
 local function UpdateButtons()
     for i, button in pairs(buttons) do
-        if button and button.action then
-            -- Use protected functions safely
+        if button and button.baseAction then
+            -- Get the correct action (just returns baseAction now)
+            local newAction = GetButtonAction(button.baseAction)
+            
+            -- Always update the action (even if it didn't change, to refresh display)
+            if InCombatLockdown() then
+                -- Can't change attributes in combat
+            else
+                button.action = newAction
+                button:SetAttribute("action", newAction)
+            end
+            
+            -- Force update the button display
             if ActionButton_Update then
                 pcall(ActionButton_Update, button)
             end
-            if ActionButton_UpdateHotkeys then
-                pcall(ActionButton_UpdateHotkeys, button)
+            if ActionButton_UpdateAction then
+                pcall(ActionButton_UpdateAction, button)
             end
+            -- Skip ActionButton_UpdateHotkeys - we manage our own keybinds
             if ActionButton_UpdateCooldown then
                 pcall(ActionButton_UpdateCooldown, button)
             end
@@ -603,6 +665,9 @@ local function UpdateButtons()
             end
         end
     end
+    
+    -- Update our custom keybinds after button updates
+    UpdateKeybinds()
 end
 
 -- Forward declaration for CreateConfigWindow
@@ -619,9 +684,15 @@ eventFrame:RegisterEvent("ACTIONBAR_UPDATE_STATE")
 eventFrame:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
 eventFrame:RegisterEvent("SPELL_UPDATE_CHARGES")
 eventFrame:RegisterEvent("SPELL_UPDATE_USABLE")
+eventFrame:RegisterEvent("SPELL_UPDATE_ICON")
+eventFrame:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+eventFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 eventFrame:RegisterEvent("PLAYER_ENTER_COMBAT")
 eventFrame:RegisterEvent("PLAYER_LEAVE_COMBAT")
+eventFrame:RegisterEvent("UNIT_ENTERED_VEHICLE")
+eventFrame:RegisterEvent("UNIT_EXITED_VEHICLE")
+eventFrame:RegisterEvent("UPDATE_OVERRIDE_ACTIONBAR")
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -631,9 +702,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             HideDefaultBars()
             mainFrame = CreateMainFrame()
             
-            print("DEBUG: About to call CreateConfigWindow()")
             CreateConfigWindow()
-            print("DEBUG: CreateConfigWindow() returned, frame is:", _G["JG13_ConfigFrame"])
             
             -- Setup override bindings and update keybinds after a delay to ensure buttons are ready
             C_Timer.After(1, function()
@@ -650,31 +719,26 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         HideDefaultBars()
         C_Timer.After(0.5, UpdateButtons)
         
-    elseif event == "ACTIONBAR_SLOT_CHANGED" or event == "UPDATE_BONUS_ACTIONBAR" then
+    elseif event == "ACTIONBAR_SLOT_CHANGED" or event == "UPDATE_BONUS_ACTIONBAR" or 
+           event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE" or 
+           event == "UPDATE_OVERRIDE_ACTIONBAR" or event == "SPELL_UPDATE_ICON" or 
+           event == "UPDATE_SHAPESHIFT_FORM" or event == "PLAYER_MOUNT_DISPLAY_CHANGED" then
         -- Full update when actions change (no throttle)
         UpdateButtons()
         
     elseif event == "ACTIONBAR_UPDATE_COOLDOWN" then
-        -- Throttle cooldown updates to once per second
-        local now = GetTime()
-        if now - updateThrottle >= 1.0 then
-            updateThrottle = now
-            for i, button in pairs(buttons) do
-                if button and button.action and ActionButton_UpdateCooldown then
-                    pcall(ActionButton_UpdateCooldown, button)
-                end
+        -- Update cooldowns immediately, no throttle
+        for i, button in pairs(buttons) do
+            if button and button.action and ActionButton_UpdateCooldown then
+                pcall(ActionButton_UpdateCooldown, button)
             end
         end
         
     elseif event == "ACTIONBAR_UPDATE_USABLE" or event == "SPELL_UPDATE_USABLE" then
-        -- Throttle usability updates to once per second
-        local now = GetTime()
-        if now - updateThrottle >= 1.0 then
-            updateThrottle = now
-            for i, button in pairs(buttons) do
-                if button and button.action and ActionButton_UpdateUsable then
-                    pcall(ActionButton_UpdateUsable, button)
-                end
+        -- Update usability immediately, no throttle
+        for i, button in pairs(buttons) do
+            if button and button.action and ActionButton_UpdateUsable then
+                pcall(ActionButton_UpdateUsable, button)
             end
         end
         
@@ -879,29 +943,22 @@ CreateConfigWindow = function()
     
     local barLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     barLabel:SetPoint("TOPLEFT", keybindsCheck, "BOTTOMLEFT", 20, -20)
-    barLabel:SetText("Hide Blizzard Action Bars:")
+    barLabel:SetText("Hide Blizzard Main Action Bar:")
     
     local barNames = {
         {key = "MainActionBar", label = "Main Bar (Bar 1)"},
-        {key = "MultiBarBottomLeft", label = "Bottom Left (Bar 2)"},
-        {key = "MultiBarBottomRight", label = "Bottom Right (Bar 3)"},
-        {key = "MultiBarRight", label = "Right Bar 1 (Bar 4)"},
-        {key = "MultiBarLeft", label = "Right Bar 2 (Bar 5)"},
-        {key = "MultiBar5", label = "Bar 6"},
-        {key = "MultiBar6", label = "Bar 7"},
-        {key = "MultiBar7", label = "Bar 8"},
     }
     
     local yOffset = -50
     for i, barInfo in ipairs(barNames) do
         local check = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
-        check:SetPoint("TOPLEFT", barLabel, "BOTTOMLEFT", 20 + ((i-1) % 2) * 200, -10 - math.floor((i-1) / 2) * 30)
+        check:SetPoint("TOPLEFT", barLabel, "BOTTOMLEFT", 20, -10)
         check.text = check:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         check.text:SetPoint("LEFT", check, "RIGHT", 5, 0)
         check.text:SetText(barInfo.label)
         
-        -- Initialize checkbox state (handle new MainActionBar)
-        if not JarsG13BarsDB.hideBars[barInfo.key] then
+        -- Initialize checkbox state only if it's nil (not set yet)
+        if JarsG13BarsDB.hideBars[barInfo.key] == nil then
             JarsG13BarsDB.hideBars[barInfo.key] = true
         end
         check:SetChecked(JarsG13BarsDB.hideBars[barInfo.key])
