@@ -16,7 +16,7 @@ Often, the 6 central buttons are the primary buttons used, whereas the outside b
 
 I have extra slots to accomodate mouse buttons also, for easy binding. 
 
-This is 100% a pet project for a very specific use-case. BUT, it does also double as a general-purpose lightweight Action Bar mod. It still has a cleran look with large/medium/small action buttons. 
+This is 100% a pet project for a very specific use-case. BUT, it does also double as a general-purpose lightweight Action Bar mod. It still has a clean look with large/medium/small action buttons. 
 
 ## Configuration
 
