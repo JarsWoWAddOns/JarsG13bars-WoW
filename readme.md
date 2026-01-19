@@ -10,13 +10,13 @@ The view is statically set for:
 
 This cannot be changed. The layout losely matches the Logitech G13
 
-<img width="750" height="994" alt="image" src="https://github.com/user-attachments/assets/ea94f12f-fe9a-4f31-9a9f-ce6dcc202d75" />
+<img width="325" height="446" alt="image" src="https://github.com/user-attachments/assets/ea94f12f-fe9a-4f31-9a9f-ce6dcc202d75" />
 
 Often, the 6 central buttons are the primary buttons used, whereas the outside buttons are less often used. 
 
 I have extra slots to accomodate mouse buttons also, for easy binding. 
 
-This is 100% a pet project for a very specific use-ccase. BUT, it does also double as a general-purpose lightweight Action Bar mod. It still has a cleran look with large/medium/small action buttons. 
+This is 100% a pet project for a very specific use-case. BUT, it does also double as a general-purpose lightweight Action Bar mod. It still has a cleran look with large/medium/small action buttons. 
 
 ## Configuration
 
