@@ -18,82 +18,70 @@ local SNAP_DISTANCE = 20     -- Distance to snap to center
 local mainFrame
 local buttons = {}
 local UIHider -- Hidden frame for hiding Blizzard bars
-local updateThrottle = 0 -- Throttle for ActionButton updates
 
--- Button Controller - centralized button update system
-local ButtonController = CreateFrame("Frame")
-ButtonController.buttons = {}
-ButtonController.elapsed = 0
-ButtonController:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
-ButtonController:RegisterEvent("SPELL_UPDATE_ICON")
-ButtonController:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
-ButtonController:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
-ButtonController:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+-- Action bar page tracking
+local currentPage = 1
 
--- OnUpdate for aggressive icon polling
-ButtonController:SetScript("OnUpdate", function(self, elapsed)
-    self.elapsed = self.elapsed + elapsed
-    if self.elapsed >= 0.5 then  -- Update every 0.5 seconds
-        self.elapsed = 0
-        for button in pairs(self.buttons) do
-            local texture = GetActionTexture(button.action)
-            if button.icon then
-                if texture then
-                    button.icon:SetTexture(texture)
-                    button.icon:SetDesaturated(false)
-                    button.icon:SetVertexColor(1, 1, 1)
-                    button.icon:Show()
-                else
-                    button.icon:SetTexture(nil)
-                    button.icon:Hide()
-                end
-            end
-            -- Update usability (removes gray/desaturated state)
-            if ActionButton_UpdateUsable then
-                ActionButton_UpdateUsable(button)
-            end
-        end
+-- Calculate which page we're on based on game state
+local function GetCurrentPage()
+    -- Check for override bar (dragonriding, special mounts)
+    if HasOverrideActionBar() then
+        return 18  -- Override bar uses page 18 (actions 133-144)
     end
-end)
-
-ButtonController:SetScript("OnEvent", function(self, event, slot)
-    -- Safety check - don't run if buttons aren't created yet
-    if not ActionButton_Update then return end
     
-    if event == "ACTIONBAR_SLOT_CHANGED" then
-        if slot == 0 or slot == nil then
-            for button in pairs(self.buttons) do
-                -- Force icon texture refresh
-                local texture = GetActionTexture(button.action)
-                if button.icon and texture then
-                    button.icon:SetTexture(texture)
-                    button.icon:Show()
-                end
-                ActionButton_Update(button)
+    -- Check for vehicle bar
+    if HasVehicleActionBar() then
+        return 12  -- Vehicle bar uses page 12 (actions 133-144)
+    end
+    
+    -- Check for possess bar
+    if IsPossessBarVisible() then
+        return 12  -- Possess bar uses page 12
+    end
+    
+    -- Check for bonus bar (stance, forms, etc.)
+    local bonusBarOffset = GetBonusBarOffset()
+    if bonusBarOffset and bonusBarOffset > 0 then
+        return bonusBarOffset + 6  -- Bonus bars are pages 7-11
+    end
+    
+    -- Default to page 1 (actions 1-12)
+    return 1
+end
+
+-- Update button actions based on current page
+local function UpdatePagedActions()
+    if InCombatLockdown() then return end
+    
+    local page = GetCurrentPage()
+    if page == currentPage then return end  -- No change
+    
+    currentPage = page
+    
+    -- Update buttons 1-12 to point to the correct page
+    for i = 1, 12 do
+        local button = buttons[i]
+        if button then
+            local action = (page - 1) * 12 + i
+            button.action = action
+            button:SetAttribute("action", action)
+            if button.Update then
+                pcall(button.Update, button)
             end
-        else
-            for button in pairs(self.buttons) do
-                if button.action == slot then
-                    local texture = GetActionTexture(button.action)
-                    if button.icon and texture then
-                        button.icon:SetTexture(texture)
-                        button.icon:Show()
-                    end
-                    ActionButton_Update(button)
-                end
-            end
-        end
-    else
-        -- For icon changes, force texture refresh on all buttons
-        for button in pairs(self.buttons) do
-            local texture = GetActionTexture(button.action)
-            if button.icon and texture then
-                button.icon:SetTexture(texture)
-                button.icon:Show()
-            end
-            ActionButton_Update(button)
         end
     end
+end
+
+-- Event handler for page changes
+local pageFrame = CreateFrame("Frame")
+pageFrame:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
+pageFrame:RegisterEvent("UPDATE_VEHICLE_ACTIONBAR")
+pageFrame:RegisterEvent("UPDATE_POSSESS_BAR")
+pageFrame:RegisterEvent("UPDATE_OVERRIDE_ACTIONBAR")
+pageFrame:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
+pageFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+pageFrame:SetScript("OnEvent", function()
+    UpdatePagedActions()
 end)
 
 -- Initialize saved variables
@@ -307,25 +295,23 @@ end
 local function CreateActionButton(parent, index, size)
     local button = CreateFrame("CheckButton", "JG13_Button" .. index, parent, "ActionBarButtonTemplate")
     button:SetSize(size, size)
-    button.action = index
     button.baseAction = index  -- Store the base action for reference
     
     -- Setup action button
     button:SetAttribute("type", "action")
-    button:SetAttribute("action", index)
-    
-    -- Register for clicks - "Keybind" is a virtual button used by SetOverrideBindingClick
     button:RegisterForClicks("AnyUp")
     
-    -- CRITICAL: Register button with the controller for automatic updates
-    ButtonController.buttons[button] = true
-    
-    -- Set commandName for keybind lookup
     if index <= 12 then
-        -- Buttons 1-12: Main Action Bar
+        -- Buttons 1-12: Mirror Blizzard's main action bar (ActionButton1-12)
+        -- The hook will sync these to match Blizzard's dynamic paging
+        button.action = index
+        button:SetAttribute("action", index)
         button:SetAttribute("commandName", "ACTIONBUTTON" .. index)
-    elseif index <= 24 then
-        -- Buttons 13-24: MultiActionBar1 (Right Bar 2 / Bar 6)
+    else
+        -- Buttons 13-24: MultiActionBar1 (actions 73-84)
+        local multiBarAction = 72 + (index - 12)
+        button.action = multiBarAction
+        button:SetAttribute("action", multiBarAction)
         button:SetAttribute("commandName", "MULTIACTIONBAR1BUTTON" .. (index - 12))
     end
     
@@ -613,63 +599,9 @@ local function CreateMainFrame()
     return frame
 end
 
--- Function to get the correct action for a button considering vehicle/override bars
-local function GetButtonAction(baseAction)
-    -- Only apply page switching to buttons 1-12 (main bar)
-    if baseAction > 12 then
-        return baseAction
-    end
-    
-    -- Check for bonus bar (dragonriding, stance bars, etc.)
-    local bonusBar = GetBonusBarOffset()
-    if bonusBar and bonusBar == 5 then
-        -- Dragonriding: switch to page 6 (actions 61-72)
-        return 60 + baseAction
-    end
-    
-    -- Default: return base action
-    return baseAction
-end
-
--- Update all buttons
+-- Update all buttons - just refresh keybinds and paged actions
 local function UpdateButtons()
-    for i, button in pairs(buttons) do
-        if button and button.baseAction then
-            -- Get the correct action (just returns baseAction now)
-            local newAction = GetButtonAction(button.baseAction)
-            
-            -- Always update the action (even if it didn't change, to refresh display)
-            if InCombatLockdown() then
-                -- Can't change attributes in combat
-            else
-                button.action = newAction
-                button:SetAttribute("action", newAction)
-            end
-            
-            -- Force update the button display
-            if ActionButton_Update then
-                pcall(ActionButton_Update, button)
-            end
-            if ActionButton_UpdateAction then
-                pcall(ActionButton_UpdateAction, button)
-            end
-            -- Skip ActionButton_UpdateHotkeys - we manage our own keybinds
-            if ActionButton_UpdateCooldown then
-                pcall(ActionButton_UpdateCooldown, button)
-            end
-            if ActionButton_UpdateUsable then
-                pcall(ActionButton_UpdateUsable, button)
-            end
-            if ActionButton_UpdateCount then
-                pcall(ActionButton_UpdateCount, button)
-            end
-            if ActionButton_UpdateState then
-                pcall(ActionButton_UpdateState, button)
-            end
-        end
-    end
-    
-    -- Update our custom keybinds after button updates
+    UpdatePagedActions()
     UpdateKeybinds()
 end
 
@@ -709,6 +641,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             
             -- Setup override bindings and update keybinds after a delay to ensure buttons are ready
             C_Timer.After(1, function()
+                UpdatePagedActions()  -- Initial page setup
                 UpdateOverrideBindings()
                 UpdateKeybinds()
             end)
@@ -720,52 +653,24 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         
     elseif event == "PLAYER_ENTERING_WORLD" then
         HideDefaultBars()
-        C_Timer.After(0.5, UpdateButtons)
+        C_Timer.After(0.5, function()
+            UpdatePagedActions()
+            UpdateButtons()
+        end)
         
     elseif event == "ACTIONBAR_SLOT_CHANGED" or event == "UPDATE_BONUS_ACTIONBAR" or 
            event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE" or 
            event == "UPDATE_OVERRIDE_ACTIONBAR" or event == "SPELL_UPDATE_ICON" or 
            event == "UPDATE_SHAPESHIFT_FORM" or event == "PLAYER_MOUNT_DISPLAY_CHANGED" then
-        -- Full update when actions change (no throttle)
+        -- Just refresh keybinds - hooks handle action updates
         UpdateButtons()
         
-    elseif event == "ACTIONBAR_UPDATE_COOLDOWN" then
-        -- Update cooldowns immediately, no throttle
-        for i, button in pairs(buttons) do
-            if button and button.action and ActionButton_UpdateCooldown then
-                pcall(ActionButton_UpdateCooldown, button)
-            end
-        end
-        
-    elseif event == "ACTIONBAR_UPDATE_USABLE" or event == "SPELL_UPDATE_USABLE" then
-        -- Update usability immediately, no throttle
-        for i, button in pairs(buttons) do
-            if button and button.action and ActionButton_UpdateUsable then
-                pcall(ActionButton_UpdateUsable, button)
-            end
-        end
-        
-    elseif event == "ACTIONBAR_UPDATE_STATE" then
-        -- Update button state (pushed/checked)
-        for i, button in pairs(buttons) do
-            if button and button.action and ActionButton_UpdateState then
-                pcall(ActionButton_UpdateState, button)
-            end
-        end
-        
-    elseif event == "SPELL_UPDATE_CHARGES" then
-        -- Update charge counts
-        for i, button in pairs(buttons) do
-            if button and button.action and ActionButton_UpdateCount then
-                pcall(ActionButton_UpdateCount, button)
-            end
-        end
-        
-    elseif event == "PLAYER_TARGET_CHANGED" or 
-           event == "PLAYER_ENTER_COMBAT" or 
+    elseif event == "ACTIONBAR_UPDATE_COOLDOWN" or 
+           event == "ACTIONBAR_UPDATE_USABLE" or event == "SPELL_UPDATE_USABLE" or
+           event == "ACTIONBAR_UPDATE_STATE" or event == "SPELL_UPDATE_CHARGES" or
+           event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_ENTER_COMBAT" or 
            event == "PLAYER_LEAVE_COMBAT" then
-        -- These events are infrequent, safe to update
-        UpdateButtons()
+        -- ActionBarButtonTemplate handles these automatically - no action needed
     end
 end)
 
