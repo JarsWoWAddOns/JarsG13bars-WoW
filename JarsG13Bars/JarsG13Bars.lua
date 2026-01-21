@@ -823,7 +823,7 @@ CreateConfigWindow = function()
     -- Position slider
     local posSlider = CreateFrame("Slider", "JG13_PositionSlider", configFrame, "OptionsSliderTemplate")
     posSlider:SetPoint("TOPLEFT", posLabel, "BOTTOMLEFT", 0, -20)
-    posSlider:SetMinMaxValues(-1200, 0)
+    posSlider:SetMinMaxValues(-2400, 0)
     posSlider:SetValue(JarsG13BarsDB.position.y)
     posSlider:SetValueStep(1)
     posSlider:SetObeyStepOnDrag(true)
