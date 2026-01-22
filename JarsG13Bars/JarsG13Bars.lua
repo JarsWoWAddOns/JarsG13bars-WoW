@@ -138,7 +138,22 @@ local function HideDefaultBars()
         UIHider:Hide()
     end
     
-    -- Only manage the main action bar - other bars handled by in-game UI
+    -- Hide MultiBarBottomLeft (actions 73-84) since JG13 buttons 13-24 mirror it
+    local multiBar = _G["MultiBarBottomLeft"]
+    if multiBar then
+        multiBar:SetParent(UIHider)
+        multiBar:Hide()
+        -- Hide individual buttons
+        for i = 1, 12 do
+            local button = _G["MultiBarBottomLeftButton" .. i]
+            if button then
+                button:Hide()
+                button:SetParent(UIHider)
+            end
+        end
+    end
+    
+    -- Manage main action bar
     local configurableBars = {
         "MainMenuBar",        -- <= 11.2.5
         "MainActionBar",      -- >= 12.0
@@ -231,12 +246,13 @@ local function UpdateKeybinds()
         local button = _G["JG13_Button" .. i]
         if button and button.HotKey then
             if show then
-                -- Only update keybind text when showing
+                -- Buttons 1-12 use standard action bindings, 13-24 use click bindings
                 local command
                 if i <= 12 then
                     command = "ACTIONBUTTON" .. i
-                elseif i <= 24 then
-                    command = "MULTIACTIONBAR1BUTTON" .. (i - 12)
+                else
+                    -- Use click binding for buttons 13-24 (exclusive to this addon)
+                    command = "CLICK JG13_Button" .. i .. ":Keybind"
                 end
                 
                 if command then
@@ -308,7 +324,7 @@ local function CreateActionButton(parent, index, size)
         button:SetAttribute("action", index)
         button:SetAttribute("commandName", "ACTIONBUTTON" .. index)
     else
-        -- Buttons 13-24: MultiActionBar1 (actions 73-84)
+        -- Buttons 13-24: Mirror ActionBar 2 (MultiActionBar1 actions 73-84)
         local multiBarAction = 72 + (index - 12)
         button.action = multiBarAction
         button:SetAttribute("action", multiBarAction)
@@ -432,10 +448,10 @@ local function CreateActionButton(parent, index, size)
     
     -- LibKeyBound support for keybinding
     button.GetBindingAction = function(self)
-        if self.action and self.action <= 12 then
-            return "ACTIONBUTTON" .. self.action
-        elseif self.action and self.action <= 24 then
-            return "MULTIACTIONBAR1BUTTON" .. (self.action - 12)
+        if self.baseAction and self.baseAction <= 12 then
+            return "ACTIONBUTTON" .. self.baseAction
+        elseif self.baseAction and self.baseAction <= 24 then
+            return "MULTIACTIONBAR1BUTTON" .. (self.baseAction - 12)
         end
         return nil
     end
@@ -453,12 +469,12 @@ local function CreateActionButton(parent, index, size)
     end
     
     button.GetActionName = function(self)
-        if self.action and self.action <= 12 then
-            return "Action Button " .. self.action
-        elseif self.action and self.action <= 24 then
-            return "Bar 6 Button " .. (self.action - 12)
+        if self.baseAction and self.baseAction <= 12 then
+            return "Action Button " .. self.baseAction
+        elseif self.baseAction and self.baseAction <= 24 then
+            return "Bar 2 Button " .. (self.baseAction - 12)
         end
-        return "Button " .. (self.action or "?")
+        return "Button " .. (self.baseAction or "?")
     end
     
     button.SetKey = function(self, key)
@@ -647,6 +663,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             end)
             
             print("|cff00ff00Jar's G13 Action Bars|r loaded. Type |cff00ffff/jg13|r to configure.")
+            print("|cff00ff00Jar's G13|r: Buttons 1-12 mirror Action Bar 1, buttons 13-24 mirror Action Bar 2.")
             
             self:UnregisterEvent("ADDON_LOADED")
         end
