@@ -25,28 +25,43 @@ local currentPage = 1
 -- Calculate which page we're on based on game state
 local function GetCurrentPage()
     -- Check for override bar (dragonriding, special mounts)
-    if HasOverrideActionBar() then
-        return 18  -- Override bar uses page 18 (actions 133-144)
+    -- Try new API first, fall back to old
+    local hasOverride = C_ActionBar and C_ActionBar.HasOverrideActionBar and C_ActionBar.HasOverrideActionBar() or HasOverrideActionBar()
+    if hasOverride then
+        if C_ActionBar and C_ActionBar.GetOverrideBarIndex then
+            return C_ActionBar.GetOverrideBarIndex()
+        else
+            return 18  -- Override bar uses page 18 (actions 133-144)
+        end
     end
     
     -- Check for vehicle bar
-    if HasVehicleActionBar() then
-        return 12  -- Vehicle bar uses page 12 (actions 133-144)
+    local hasVehicle = C_ActionBar and C_ActionBar.HasVehicleActionBar and C_ActionBar.HasVehicleActionBar() or HasVehicleActionBar()
+    if hasVehicle then
+        if C_ActionBar and C_ActionBar.GetVehicleBarIndex then
+            return C_ActionBar.GetVehicleBarIndex()
+        else
+            return 12  -- Vehicle bar uses page 12 (actions 133-144)
+        end
     end
     
-    -- Check for possess bar
+    -- Check for possess bar (still uses old API as of 12.0.0)
     if IsPossessBarVisible() then
         return 12  -- Possess bar uses page 12
     end
     
     -- Check for bonus bar (stance, forms, etc.)
-    local bonusBarOffset = GetBonusBarOffset()
+    local bonusBarOffset = C_ActionBar and C_ActionBar.GetBonusBarOffset and C_ActionBar.GetBonusBarOffset() or GetBonusBarOffset()
     if bonusBarOffset and bonusBarOffset > 0 then
         return bonusBarOffset + 6  -- Bonus bars are pages 7-11
     end
     
-    -- Default to page 1 (actions 1-12)
-    return 1
+    -- Use the current action bar page
+    if C_ActionBar and C_ActionBar.GetActionBarPage then
+        return C_ActionBar.GetActionBarPage() or 1
+    else
+        return 1  -- Default to page 1 (actions 1-12)
+    end
 end
 
 -- Update button actions based on current page
@@ -334,6 +349,40 @@ local function CreateActionButton(parent, index, size)
     -- Ensure the button's hit rectangle matches its size
     button:SetHitRectInsets(0, 0, 0, 0)
     
+    -- Hook/override Update, UpdateAction, UpdateUsable to prevent secret value errors
+    if button.Update then
+        local originalUpdate = button.Update
+        button.Update = function(self)
+            local success, err = pcall(originalUpdate, self)
+            -- Silently suppress errors
+        end
+    end
+    
+    if button.UpdateAction then
+        local originalUpdateAction = button.UpdateAction
+        button.UpdateAction = function(self)
+            local success, err = pcall(originalUpdateAction, self)
+            -- Silently suppress errors
+        end
+    end
+    
+    if button.UpdateUsable then
+        local originalUpdateUsable = button.UpdateUsable
+        button.UpdateUsable = function(self)
+            local success, err = pcall(originalUpdateUsable, self)
+            -- Silently suppress errors
+        end
+    end
+    
+    -- Hook OnEvent to prevent event-triggered errors
+    if button.OnEvent then
+        local originalOnEvent = button.OnEvent
+        button.OnEvent = function(self, event, ...)
+            local success, err = pcall(originalOnEvent, self, event, ...)
+            -- Silently suppress errors
+        end
+    end
+    
     -- Hide all background/border elements and resize borders that show
     if button.Border then 
         button.Border:ClearAllPoints()
@@ -451,7 +500,8 @@ local function CreateActionButton(parent, index, size)
         if self.baseAction and self.baseAction <= 12 then
             return "ACTIONBUTTON" .. self.baseAction
         elseif self.baseAction and self.baseAction <= 24 then
-            return "MULTIACTIONBAR1BUTTON" .. (self.baseAction - 12)
+            -- Use CLICK bindings for buttons 13-24 (more reliable for custom addon buttons)
+            return "CLICK JG13_Button" .. self.baseAction .. ":LeftButton"
         end
         return nil
     end
