@@ -729,7 +729,23 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
            event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE" or 
            event == "UPDATE_OVERRIDE_ACTIONBAR" or event == "SPELL_UPDATE_ICON" or 
            event == "UPDATE_SHAPESHIFT_FORM" or event == "PLAYER_MOUNT_DISPLAY_CHANGED" then
-        -- Just refresh keybinds - hooks handle action updates
+        -- Update buttons to refresh icons and actions
+        if event == "ACTIONBAR_SLOT_CHANGED" then
+            local slot = ...
+            if slot and buttons[slot] then
+                -- Update specific button that changed
+                if buttons[slot].Update then
+                    pcall(buttons[slot].Update, buttons[slot])
+                end
+            else
+                -- Update all buttons if no specific slot
+                for _, button in pairs(buttons) do
+                    if button.Update then
+                        pcall(button.Update, button)
+                    end
+                end
+            end
+        end
         UpdateButtons()
         
     elseif event == "ACTIONBAR_UPDATE_COOLDOWN" or 
