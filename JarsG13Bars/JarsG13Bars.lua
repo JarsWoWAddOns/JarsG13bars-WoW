@@ -129,6 +129,11 @@ local function InitDB()
         JarsG13BarsDB.scale = 1.0  -- 100%
     end
     
+    -- Default layout mode
+    if not JarsG13BarsDB.layoutMode then
+        JarsG13BarsDB.layoutMode = "G13"  -- G13 or Keyzen
+    end
+    
     -- Default hide bars settings (hide all by default)
     if not JarsG13BarsDB.hideBars then
         JarsG13BarsDB.hideBars = {
@@ -574,6 +579,189 @@ local function CreateActionButton(parent, index, size)
     return button
 end
 
+-- Layout positioning functions
+local function ApplyG13Layout(frame)
+    -- Original G13 layout
+    local buttonIndex
+    local primaryOffsetX = SIDE_SIZE * 2 + PADDING * 2
+    local rightOffsetX = primaryOffsetX + (PRIMARY_SIZE * 3 + PADDING * 2) + PADDING
+    local bottomOffsetY = -(PRIMARY_SIZE * 2 + PADDING)
+    local bottomWidth = BOTTOM_SIZE * 6 + PADDING * 5
+    local bottomOffsetX = primaryOffsetX + ((PRIMARY_SIZE * 3 + PADDING * 2) / 2) - (bottomWidth / 2)
+    
+    -- LEFT SIDE: buttons 13-18 (2x3 grid, medium)
+    buttonIndex = 1
+    for row = 0, 2 do
+        for col = 0, 1 do
+            local btn = buttons[12 + buttonIndex]
+            if btn then
+                btn:ClearAllPoints()
+                btn:SetSize(SIDE_SIZE, SIDE_SIZE)
+                local xPos = col * (SIDE_SIZE + PADDING)
+                local yPos = -row * (SIDE_SIZE + PADDING)
+                btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, yPos)
+            end
+            buttonIndex = buttonIndex + 1
+        end
+    end
+    
+    -- CENTER: buttons 1-6 (3x2 grid, large)
+    buttonIndex = 1
+    for row = 0, 1 do
+        for col = 0, 2 do
+            local btn = buttons[buttonIndex]
+            if btn then
+                btn:ClearAllPoints()
+                btn:SetSize(PRIMARY_SIZE, PRIMARY_SIZE)
+                local xPos = primaryOffsetX + col * (PRIMARY_SIZE + PADDING)
+                local yPos = -row * (PRIMARY_SIZE + PADDING)
+                btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, yPos)
+            end
+            buttonIndex = buttonIndex + 1
+        end
+    end
+    
+    -- RIGHT SIDE: buttons 19-24 (2x3 grid, medium)
+    buttonIndex = 7
+    for row = 0, 2 do
+        for col = 0, 1 do
+            local btn = buttons[12 + buttonIndex]
+            if btn then
+                btn:ClearAllPoints()
+                btn:SetSize(SIDE_SIZE, SIDE_SIZE)
+                local xPos = rightOffsetX + col * (SIDE_SIZE + PADDING)
+                local yPos = -row * (SIDE_SIZE + PADDING)
+                btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, yPos)
+            end
+            buttonIndex = buttonIndex + 1
+        end
+    end
+    
+    -- BOTTOM: buttons 7-12 (6x1 grid, small)
+    buttonIndex = 7
+    for col = 0, 5 do
+        local btn = buttons[buttonIndex]
+        if btn then
+            btn:ClearAllPoints()
+            btn:SetSize(BOTTOM_SIZE, BOTTOM_SIZE)
+            local xPos = bottomOffsetX + col * (BOTTOM_SIZE + PADDING)
+            btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, bottomOffsetY)
+        end
+        buttonIndex = buttonIndex + 1
+    end
+end
+
+local function ApplyKeyzenLayout(frame)
+    -- Keyzen keyboard-style layout
+    -- Large buttons (01-06) are the fixed center anchor
+    local largeOffsetX = SIDE_SIZE * 2 + PADDING * 3
+    local largeOffsetY = -(BOTTOM_SIZE + PADDING + SIDE_SIZE + PADDING)
+    
+    -- Large buttons: 01-06 (3x2 grid) - THE ANCHOR
+    local buttonIndex = 1
+    for row = 0, 1 do
+        for col = 0, 2 do
+            local btn = buttons[buttonIndex]
+            if btn then
+                btn:ClearAllPoints()
+                btn:SetSize(PRIMARY_SIZE, PRIMARY_SIZE)
+                local xPos = largeOffsetX + col * (PRIMARY_SIZE + PADDING)
+                local yPos = largeOffsetY - row * (PRIMARY_SIZE + PADDING)
+                btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, yPos)
+            end
+            buttonIndex = buttonIndex + 1
+        end
+    end
+    
+    -- Small buttons at top: 07, 08, 09 (centered above large buttons)
+    local smallTopOffsetX = largeOffsetX + (PRIMARY_SIZE * 3 + PADDING * 2) / 2 - (BOTTOM_SIZE * 3 + PADDING * 2) / 2
+    local smallTopOffsetY = 0
+    for i = 0, 2 do
+        local btn = buttons[7 + i]
+        if btn then
+            btn:ClearAllPoints()
+            btn:SetSize(BOTTOM_SIZE, BOTTOM_SIZE)
+            local xPos = smallTopOffsetX + i * (BOTTOM_SIZE + PADDING)
+            btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, smallTopOffsetY)
+        end
+    end
+    
+    -- Medium buttons row 2: 13, 15, 20, 22, 24 (evenly spaced with 20 centered above 02)
+    local medRow2Y = -(BOTTOM_SIZE + PADDING)
+    -- Button 20 centered above button 02 (which is at largeOffsetX + PRIMARY_SIZE + PADDING)
+    local btn20X = largeOffsetX + PRIMARY_SIZE + PADDING
+    -- Calculate spacing for even distribution
+    local rowSpacing = SIDE_SIZE + PADDING
+    
+    buttons[20]:ClearAllPoints()
+    buttons[20]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[20]:SetPoint("TOPLEFT", frame, "TOPLEFT", btn20X, medRow2Y)
+    
+    buttons[17]:ClearAllPoints()
+    buttons[17]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[17]:SetPoint("TOPLEFT", frame, "TOPLEFT", btn20X - rowSpacing, medRow2Y)
+    
+    buttons[13]:ClearAllPoints()
+    buttons[13]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[13]:SetPoint("TOPLEFT", frame, "TOPLEFT", btn20X - rowSpacing * 2, medRow2Y)
+    
+    buttons[22]:ClearAllPoints()
+    buttons[22]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[22]:SetPoint("TOPLEFT", frame, "TOPLEFT", btn20X + rowSpacing, medRow2Y)
+    
+    buttons[24]:ClearAllPoints()
+    buttons[24]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[24]:SetPoint("TOPLEFT", frame, "TOPLEFT", btn20X + rowSpacing * 2, medRow2Y)
+    
+    -- Medium button row 3 (aligned with L01-L03): 14 (left), 19 (right)
+    buttons[14]:ClearAllPoints()
+    buttons[14]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[14]:SetPoint("TOPLEFT", frame, "TOPLEFT", largeOffsetX - SIDE_SIZE - PADDING, largeOffsetY)
+    
+    buttons[19]:ClearAllPoints()
+    buttons[19]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[19]:SetPoint("TOPLEFT", frame, "TOPLEFT", largeOffsetX + (PRIMARY_SIZE + PADDING) * 3, largeOffsetY)
+    
+    -- Medium row 4 (aligned with L04-L06): 23, 16 (left), 21 (right)
+    -- Move up by half button width to close the gap
+    local medRow4Y = largeOffsetY - (PRIMARY_SIZE + PADDING) + SIDE_SIZE/2
+    buttons[23]:ClearAllPoints()
+    buttons[23]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[23]:SetPoint("TOPLEFT", frame, "TOPLEFT", largeOffsetX - SIDE_SIZE * 2 - PADDING * 2, medRow4Y)
+    
+    buttons[16]:ClearAllPoints()
+    buttons[16]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[16]:SetPoint("TOPLEFT", frame, "TOPLEFT", largeOffsetX - SIDE_SIZE - PADDING, medRow4Y)
+    
+    buttons[21]:ClearAllPoints()
+    buttons[21]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[21]:SetPoint("TOPLEFT", frame, "TOPLEFT", largeOffsetX + (PRIMARY_SIZE + PADDING) * 3, medRow4Y)
+    
+    -- Bottom row: 15, 18 (left), 10, 11, 12 (small, below button 5)
+    -- Move up by full button length to close the gap
+    local bottomRowY = medRow4Y - SIDE_SIZE - PADDING
+    buttons[15]:ClearAllPoints()
+    buttons[15]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[15]:SetPoint("TOPLEFT", frame, "TOPLEFT", largeOffsetX - SIDE_SIZE * 2 - PADDING * 2, bottomRowY)
+    
+    buttons[18]:ClearAllPoints()
+    buttons[18]:SetSize(SIDE_SIZE, SIDE_SIZE)
+    buttons[18]:SetPoint("TOPLEFT", frame, "TOPLEFT", largeOffsetX - SIDE_SIZE - PADDING, bottomRowY)
+    
+    -- Small buttons 10, 11, 12 below button 5, with button 11 centered under button 5
+    local smallBottomOffsetX = largeOffsetX + PRIMARY_SIZE + PADDING + PRIMARY_SIZE/2 - BOTTOM_SIZE - PADDING - BOTTOM_SIZE/2
+    local smallBottomOffsetY = largeOffsetY - PRIMARY_SIZE * 2 - PADDING * 2
+    for i = 0, 2 do
+        local btn = buttons[10 + i]
+        if btn then
+            btn:ClearAllPoints()
+            btn:SetSize(BOTTOM_SIZE, BOTTOM_SIZE)
+            local xPos = smallBottomOffsetX + i * (BOTTOM_SIZE + PADDING)
+            btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, smallBottomOffsetY)
+        end
+    end
+end
+
 -- Create the main frame with all buttons
 -- Create the main frame with all buttons
 local function CreateMainFrame()
@@ -607,59 +795,16 @@ local function CreateMainFrame()
     frame.bg:SetAllPoints()
     frame.bg:SetColorTexture(0, 0, 0, JarsG13BarsDB.bgOpacity or 0.3)
     
-    -- Create buttons
-    local buttonIndex = 1
-    
-    -- LEFT SIDE: Action Bar 2 (slots 13-18) - 2x3 grid at 66% size
-    for row = 0, 2 do
-        for col = 0, 1 do
-            local btn = CreateActionButton(frame, 12 + buttonIndex, SIDE_SIZE)
-            local xPos = col * (SIDE_SIZE + PADDING)
-            local yPos = -row * (SIDE_SIZE + PADDING)
-            btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, yPos)
-            buttons[12 + buttonIndex] = btn
-            buttonIndex = buttonIndex + 1
-        end
+    -- Create all buttons first (without positioning)
+    for i = 1, 24 do
+        buttons[i] = CreateActionButton(frame, i, PRIMARY_SIZE)
     end
     
-    -- PRIMARY CENTER: Action Bar 1 (slots 1-6) - 3x2 grid at 100% size
-    local primaryOffsetX = sideWidth + PADDING
-    buttonIndex = 1
-    for row = 0, 1 do
-        for col = 0, 2 do
-            local btn = CreateActionButton(frame, buttonIndex, PRIMARY_SIZE)
-            local xPos = primaryOffsetX + col * (PRIMARY_SIZE + PADDING)
-            local yPos = -row * (PRIMARY_SIZE + PADDING)
-            btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, yPos)
-            buttons[buttonIndex] = btn
-            buttonIndex = buttonIndex + 1
-        end
-    end
-    
-    -- RIGHT SIDE: Action Bar 2 (slots 19-24) - 2x3 grid at 66% size
-    local rightOffsetX = primaryOffsetX + primaryWidth + PADDING
-    buttonIndex = 7
-    for row = 0, 2 do
-        for col = 0, 1 do
-            local btn = CreateActionButton(frame, 12 + buttonIndex, SIDE_SIZE)
-            local xPos = rightOffsetX + col * (SIDE_SIZE + PADDING)
-            local yPos = -row * (SIDE_SIZE + PADDING)
-            btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, yPos)
-            buttons[12 + buttonIndex] = btn
-            buttonIndex = buttonIndex + 1
-        end
-    end
-    
-    -- BOTTOM: Action Bar 1 (slots 7-12) - 6x1 grid at 25% size
-    local bottomOffsetY = -(primaryHeight + PADDING)
-    local bottomOffsetX = primaryOffsetX + (primaryWidth / 2) - (bottomWidth / 2)
-    buttonIndex = 7
-    for col = 0, 5 do
-        local btn = CreateActionButton(frame, buttonIndex, BOTTOM_SIZE)
-        local xPos = bottomOffsetX + col * (BOTTOM_SIZE + PADDING)
-        btn:SetPoint("TOPLEFT", frame, "TOPLEFT", xPos, bottomOffsetY)
-        buttons[buttonIndex] = btn
-        buttonIndex = buttonIndex + 1
+    -- Apply layout based on mode
+    if JarsG13BarsDB.layoutMode == "Keyzen" then
+        ApplyKeyzenLayout(frame)
+    else
+        ApplyG13Layout(frame)
     end
     
     return frame
@@ -878,10 +1023,40 @@ CreateConfigWindow = function()
         UpdateScale(value)
     end)
     
+    -- Layout mode dropdown
+    local layoutLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    layoutLabel:SetPoint("TOPLEFT", scaleSlider, "BOTTOMLEFT", 0, -40)
+    layoutLabel:SetText("Layout Mode:")
+    
+    local layoutDropdown = CreateFrame("Frame", "JG13_LayoutDropdown", configFrame, "UIDropDownMenuTemplate")
+    layoutDropdown:SetPoint("TOPLEFT", layoutLabel, "TOPRIGHT", -15, 5)
+    UIDropDownMenu_SetWidth(layoutDropdown, 100)
+    UIDropDownMenu_Initialize(layoutDropdown, function(self)
+        local info = UIDropDownMenu_CreateInfo()
+        info.func = function(btn)
+            JarsG13BarsDB.layoutMode = btn.value
+            UIDropDownMenu_SetText(layoutDropdown, btn:GetText())
+            -- Reapply layout
+            if mainFrame then
+                if JarsG13BarsDB.layoutMode == "Keyzen" then
+                    ApplyKeyzenLayout(mainFrame)
+                else
+                    ApplyG13Layout(mainFrame)
+                end
+            end
+        end
+        
+        info.text, info.value, info.checked = "G13", "G13", JarsG13BarsDB.layoutMode == "G13"
+        UIDropDownMenu_AddButton(info)
+        info.text, info.value, info.checked = "Keyzen", "Keyzen", JarsG13BarsDB.layoutMode == "Keyzen"
+        UIDropDownMenu_AddButton(info)
+    end)
+    UIDropDownMenu_SetText(layoutDropdown, JarsG13BarsDB.layoutMode or "G13")
+    
     -- Reset button
     local resetBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
     resetBtn:SetSize(150, 25)
-    resetBtn:SetPoint("TOP", scaleSlider, "BOTTOM", 0, -30)
+    resetBtn:SetPoint("TOP", layoutDropdown, "BOTTOM", 0, -10)
     resetBtn:SetText("Reset to Default")
     resetBtn:SetScript("OnClick", function()
         posSlider:SetValue(-400)
