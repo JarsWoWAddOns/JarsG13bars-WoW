@@ -8,9 +8,14 @@ The view is statically set for:
 
 <img width="482" height="218" alt="image" src="https://github.com/user-attachments/assets/92b25137-35bc-43d0-9020-16acee7fe0fa" />
 
-This cannot be changed. The layout losely matches the Logitech G13
+This cannot be changed. The layout losely matches the Logitech G13. 
 
 <img width="325" height="446" alt="image" src="https://github.com/user-attachments/assets/ea94f12f-fe9a-4f31-9a9f-ce6dcc202d75" />
+
+I have also added a layout to match the Keyzen as well, asI occasionally do use that. 
+
+<img width="409" height="301" alt="image" src="https://github.com/user-attachments/assets/9f531a51-8693-4286-a919-c9532dc4fdaa" />
+
 
 Often, the 6 central buttons are the primary buttons used, whereas the outside buttons are less often used. 
 
