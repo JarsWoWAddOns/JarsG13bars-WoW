@@ -5,7 +5,7 @@
 JarsG13BarsDB = JarsG13BarsDB or {}
 
 -- Libraries
-local LibKeyBound = LibStub("LibKeyBound-1.0")
+local LibKeyBound = LibStub and LibStub("LibKeyBound-1.0", true)
 
 -- Configuration
 local PRIMARY_SIZE = 80      -- 100% size for 3x2 grid
@@ -78,11 +78,7 @@ local function UpdatePagedActions()
         local button = buttons[i]
         if button then
             local action = (page - 1) * 12 + i
-            button.action = action
             button:SetAttribute("action", action)
-            if button.Update then
-                pcall(button.Update, button)
-            end
         end
     end
 end
@@ -340,53 +336,17 @@ local function CreateActionButton(parent, index, size)
     if index <= 12 then
         -- Buttons 1-12: Mirror Blizzard's main action bar (ActionButton1-12)
         -- The hook will sync these to match Blizzard's dynamic paging
-        button.action = index
         button:SetAttribute("action", index)
         button:SetAttribute("commandName", "ACTIONBUTTON" .. index)
     else
         -- Buttons 13-24: Mirror ActionBar 2 (MultiActionBar1 actions 73-84)
         local multiBarAction = 72 + (index - 12)
-        button.action = multiBarAction
         button:SetAttribute("action", multiBarAction)
         button:SetAttribute("commandName", "MULTIACTIONBAR1BUTTON" .. (index - 12))
     end
     
     -- Ensure the button's hit rectangle matches its size
     button:SetHitRectInsets(0, 0, 0, 0)
-    
-    -- Hook/override Update, UpdateAction, UpdateUsable to prevent secret value errors
-    if button.Update then
-        local originalUpdate = button.Update
-        button.Update = function(self)
-            local success, err = pcall(originalUpdate, self)
-            -- Silently suppress errors
-        end
-    end
-    
-    if button.UpdateAction then
-        local originalUpdateAction = button.UpdateAction
-        button.UpdateAction = function(self)
-            local success, err = pcall(originalUpdateAction, self)
-            -- Silently suppress errors
-        end
-    end
-    
-    if button.UpdateUsable then
-        local originalUpdateUsable = button.UpdateUsable
-        button.UpdateUsable = function(self)
-            local success, err = pcall(originalUpdateUsable, self)
-            -- Silently suppress errors
-        end
-    end
-    
-    -- Hook OnEvent to prevent event-triggered errors
-    if button.OnEvent then
-        local originalOnEvent = button.OnEvent
-        button.OnEvent = function(self, event, ...)
-            local success, err = pcall(originalOnEvent, self, event, ...)
-            -- Silently suppress errors
-        end
-    end
     
     -- Hide all background/border elements and resize borders that show
     if button.Border then 
@@ -874,23 +834,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
            event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE" or 
            event == "UPDATE_OVERRIDE_ACTIONBAR" or event == "SPELL_UPDATE_ICON" or 
            event == "UPDATE_SHAPESHIFT_FORM" or event == "PLAYER_MOUNT_DISPLAY_CHANGED" then
-        -- Update buttons to refresh icons and actions
-        if event == "ACTIONBAR_SLOT_CHANGED" then
-            local slot = ...
-            if slot and buttons[slot] then
-                -- Update specific button that changed
-                if buttons[slot].Update then
-                    pcall(buttons[slot].Update, buttons[slot])
-                end
-            else
-                -- Update all buttons if no specific slot
-                for _, button in pairs(buttons) do
-                    if button.Update then
-                        pcall(button.Update, button)
-                    end
-                end
-            end
-        end
+        -- ActionBarButtonTemplate handles ACTIONBAR_SLOT_CHANGED internally
+        -- Just update keybinds and paged actions
         UpdateButtons()
         
     elseif event == "ACTIONBAR_UPDATE_COOLDOWN" or 
@@ -1028,30 +973,27 @@ CreateConfigWindow = function()
     layoutLabel:SetPoint("TOPLEFT", scaleSlider, "BOTTOMLEFT", 0, -40)
     layoutLabel:SetText("Layout Mode:")
     
-    local layoutDropdown = CreateFrame("Frame", "JG13_LayoutDropdown", configFrame, "UIDropDownMenuTemplate")
-    layoutDropdown:SetPoint("TOPLEFT", layoutLabel, "TOPRIGHT", -15, 5)
-    UIDropDownMenu_SetWidth(layoutDropdown, 100)
-    UIDropDownMenu_Initialize(layoutDropdown, function(self)
-        local info = UIDropDownMenu_CreateInfo()
-        info.func = function(btn)
-            JarsG13BarsDB.layoutMode = btn.value
-            UIDropDownMenu_SetText(layoutDropdown, btn:GetText())
-            -- Reapply layout
-            if mainFrame then
-                if JarsG13BarsDB.layoutMode == "Keyzen" then
-                    ApplyKeyzenLayout(mainFrame)
-                else
-                    ApplyG13Layout(mainFrame)
-                end
-            end
+    local layoutDropdown = CreateFrame("DropdownButton", nil, configFrame, "WowStyle1DropdownTemplate")
+    layoutDropdown:SetPoint("TOPLEFT", layoutLabel, "TOPRIGHT", 5, 3)
+    layoutDropdown:SetWidth(130)
+    layoutDropdown:SetDefaultText(JarsG13BarsDB.layoutMode or "G13")
+    layoutDropdown:SetupMenu(function(_, rootDescription)
+        local layouts = { "G13", "Keyzen" }
+        for _, name in ipairs(layouts) do
+            rootDescription:CreateRadio(name,
+                function() return JarsG13BarsDB.layoutMode == name end,
+                function()
+                    JarsG13BarsDB.layoutMode = name
+                    if mainFrame then
+                        if name == "Keyzen" then
+                            ApplyKeyzenLayout(mainFrame)
+                        else
+                            ApplyG13Layout(mainFrame)
+                        end
+                    end
+                end)
         end
-        
-        info.text, info.value, info.checked = "G13", "G13", JarsG13BarsDB.layoutMode == "G13"
-        UIDropDownMenu_AddButton(info)
-        info.text, info.value, info.checked = "Keyzen", "Keyzen", JarsG13BarsDB.layoutMode == "Keyzen"
-        UIDropDownMenu_AddButton(info)
     end)
-    UIDropDownMenu_SetText(layoutDropdown, JarsG13BarsDB.layoutMode or "G13")
     
     -- Reset button
     local resetBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
