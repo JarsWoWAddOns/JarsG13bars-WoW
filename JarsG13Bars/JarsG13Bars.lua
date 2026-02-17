@@ -129,6 +129,16 @@ local function InitDB()
     if not JarsG13BarsDB.layoutMode then
         JarsG13BarsDB.layoutMode = "G13"  -- G13 or Keyzen
     end
+
+    -- Default frame alpha (overall transparency)
+    if not JarsG13BarsDB.frameAlpha then
+        JarsG13BarsDB.frameAlpha = 1.0
+    end
+
+    -- Default hide on mouse out
+    if JarsG13BarsDB.hideOnMouseOut == nil then
+        JarsG13BarsDB.hideOnMouseOut = false
+    end
     
     -- Default hide bars settings (hide all by default)
     if not JarsG13BarsDB.hideBars then
@@ -766,7 +776,22 @@ local function CreateMainFrame()
     else
         ApplyG13Layout(frame)
     end
-    
+
+    -- Apply overall frame alpha
+    frame:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
+
+    -- Hide on mouse out behavior (uses IsMouseOver polling since child buttons consume mouse events)
+    if JarsG13BarsDB.hideOnMouseOut then
+        frame:SetAlpha(0)
+        frame:SetScript("OnUpdate", function(self)
+            if self:IsMouseOver() then
+                self:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
+            else
+                self:SetAlpha(0)
+            end
+        end)
+    end
+
     return frame
 end
 
@@ -872,6 +897,35 @@ local function UpdateScale(scale)
     end
 end
 
+-- Function to update overall frame alpha
+local function UpdateFrameAlpha(alpha)
+    if mainFrame then
+        JarsG13BarsDB.frameAlpha = alpha
+        if not JarsG13BarsDB.hideOnMouseOut then
+            mainFrame:SetAlpha(alpha)
+        end
+    end
+end
+
+-- Function to apply hide-on-mouse-out behavior
+local function ApplyHideOnMouseOut(enabled)
+    if not mainFrame then return end
+    JarsG13BarsDB.hideOnMouseOut = enabled
+    if enabled then
+        mainFrame:SetAlpha(0)
+        mainFrame:SetScript("OnUpdate", function(self)
+            if self:IsMouseOver() then
+                self:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
+            else
+                self:SetAlpha(0)
+            end
+        end)
+    else
+        mainFrame:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
+        mainFrame:SetScript("OnUpdate", nil)
+    end
+end
+
 -- Create config window
 local configFrame
 CreateConfigWindow = function()
@@ -880,7 +934,7 @@ CreateConfigWindow = function()
     end
     
     configFrame = CreateFrame("Frame", "JG13_ConfigFrame", UIParent, "BasicFrameTemplateWithInset")
-    configFrame:SetSize(400, 680)
+    configFrame:SetSize(400, 780)
     configFrame:SetPoint("CENTER")
     configFrame:SetMovable(true)
     configFrame:EnableMouse(true)
@@ -967,10 +1021,46 @@ CreateConfigWindow = function()
         self.Text:SetText(string.format("%.0f%%", value * 100))
         UpdateScale(value)
     end)
-    
+
+    -- Frame Alpha (overall transparency) label
+    local alphaLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    alphaLabel:SetPoint("TOPLEFT", scaleSlider, "BOTTOMLEFT", 0, -40)
+    alphaLabel:SetText("Overall Transparency:")
+
+    -- Frame Alpha slider
+    local alphaSlider = CreateFrame("Slider", "JG13_AlphaSlider", configFrame, "OptionsSliderTemplate")
+    alphaSlider:SetPoint("TOPLEFT", alphaLabel, "BOTTOMLEFT", 0, -20)
+    alphaSlider:SetMinMaxValues(0, 1)
+    alphaSlider:SetValue(JarsG13BarsDB.frameAlpha or 1.0)
+    alphaSlider:SetValueStep(0.05)
+    alphaSlider:SetObeyStepOnDrag(true)
+    alphaSlider:SetWidth(350)
+
+    -- Alpha slider text
+    alphaSlider.Low:SetText("Invisible")
+    alphaSlider.High:SetText("Full")
+    alphaSlider.Text:SetText(string.format("%.0f%%", (JarsG13BarsDB.frameAlpha or 1.0) * 100))
+
+    alphaSlider:SetScript("OnValueChanged", function(self, value)
+        value = math.floor(value / 0.05 + 0.5) * 0.05  -- Round to nearest 0.05
+        self.Text:SetText(string.format("%.0f%%", value * 100))
+        UpdateFrameAlpha(value)
+    end)
+
+    -- Hide on mouse out checkbox
+    local hideCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+    hideCheck:SetPoint("TOPLEFT", alphaSlider, "BOTTOMLEFT", -10, -10)
+    hideCheck.text = hideCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    hideCheck.text:SetPoint("LEFT", hideCheck, "RIGHT", 5, 0)
+    hideCheck.text:SetText("Hide unless moused over")
+    hideCheck:SetChecked(JarsG13BarsDB.hideOnMouseOut)
+    hideCheck:SetScript("OnClick", function(self)
+        ApplyHideOnMouseOut(self:GetChecked())
+    end)
+
     -- Layout mode dropdown
     local layoutLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    layoutLabel:SetPoint("TOPLEFT", scaleSlider, "BOTTOMLEFT", 0, -40)
+    layoutLabel:SetPoint("TOPLEFT", hideCheck, "BOTTOMLEFT", 10, -10)
     layoutLabel:SetText("Layout Mode:")
     
     local layoutDropdown = CreateFrame("DropdownButton", nil, configFrame, "WowStyle1DropdownTemplate")
@@ -1004,9 +1094,13 @@ CreateConfigWindow = function()
         posSlider:SetValue(-400)
         opacitySlider:SetValue(0.3)
         scaleSlider:SetValue(1.0)
+        alphaSlider:SetValue(1.0)
+        hideCheck:SetChecked(false)
         UpdateFramePosition(-400)
         UpdateBackgroundOpacity(0.3)
         UpdateScale(1.0)
+        UpdateFrameAlpha(1.0)
+        ApplyHideOnMouseOut(false)
         print("|cff00ff00Jar's G13 Bars|r: Settings reset to default.")
     end)
     
