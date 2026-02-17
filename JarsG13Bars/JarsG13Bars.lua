@@ -19,81 +19,47 @@ local mainFrame
 local buttons = {}
 local UIHider -- Hidden frame for hiding Blizzard bars
 
--- Action bar page tracking
-local currentPage = 1
+-- Secure state driver for combat-safe action bar page swapping.
+-- Uses WoW's restricted environment so page changes work even in combat.
+local stateDriverFrame
 
--- Calculate which page we're on based on game state
-local function GetCurrentPage()
-    -- Check for override bar (dragonriding, special mounts)
-    -- Try new API first, fall back to old
-    local hasOverride = C_ActionBar and C_ActionBar.HasOverrideActionBar and C_ActionBar.HasOverrideActionBar() or HasOverrideActionBar()
-    if hasOverride then
-        if C_ActionBar and C_ActionBar.GetOverrideBarIndex then
-            return C_ActionBar.GetOverrideBarIndex()
-        else
-            return 18  -- Override bar uses page 18 (actions 133-144)
-        end
-    end
-    
-    -- Check for vehicle bar
-    local hasVehicle = C_ActionBar and C_ActionBar.HasVehicleActionBar and C_ActionBar.HasVehicleActionBar() or HasVehicleActionBar()
-    if hasVehicle then
-        if C_ActionBar and C_ActionBar.GetVehicleBarIndex then
-            return C_ActionBar.GetVehicleBarIndex()
-        else
-            return 12  -- Vehicle bar uses page 12 (actions 133-144)
-        end
-    end
-    
-    -- Check for possess bar (still uses old API as of 12.0.0)
-    if IsPossessBarVisible() then
-        return 12  -- Possess bar uses page 12
-    end
-    
-    -- Check for bonus bar (stance, forms, etc.)
-    local bonusBarOffset = C_ActionBar and C_ActionBar.GetBonusBarOffset and C_ActionBar.GetBonusBarOffset() or GetBonusBarOffset()
-    if bonusBarOffset and bonusBarOffset > 0 then
-        return bonusBarOffset + 6  -- Bonus bars are pages 7-11
-    end
-    
-    -- Use the current action bar page
-    if C_ActionBar and C_ActionBar.GetActionBarPage then
-        return C_ActionBar.GetActionBarPage() or 1
-    else
-        return 1  -- Default to page 1 (actions 1-12)
-    end
-end
+local function SetupSecurePageDriver()
+    stateDriverFrame = CreateFrame("Frame", "JG13_StateDriver", UIParent, "SecureHandlerStateTemplate")
 
--- Update button actions based on current page
-local function UpdatePagedActions()
-    if InCombatLockdown() then return end
-    
-    local page = GetCurrentPage()
-    if page == currentPage then return end  -- No change
-    
-    currentPage = page
-    
-    -- Update buttons 1-12 to point to the correct page
+    -- Register frame refs so the restricted snippet can access buttons 1-12
     for i = 1, 12 do
-        local button = buttons[i]
-        if button then
-            local action = (page - 1) * 12 + i
-            button:SetAttribute("action", action)
-        end
+        stateDriverFrame:SetFrameRef("button" .. i, buttons[i])
     end
-end
 
--- Event handler for page changes
-local pageFrame = CreateFrame("Frame")
-pageFrame:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
-pageFrame:RegisterEvent("UPDATE_VEHICLE_ACTIONBAR")
-pageFrame:RegisterEvent("UPDATE_POSSESS_BAR")
-pageFrame:RegisterEvent("UPDATE_OVERRIDE_ACTIONBAR")
-pageFrame:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
-pageFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
-pageFrame:SetScript("OnEvent", function()
-    UpdatePagedActions()
-end)
+    -- Restricted Lua snippet executed on every state change (works in combat)
+    stateDriverFrame:SetAttribute("_onstate-page", [[
+        local page
+        if newstate == "override" then
+            page = GetOverrideBarIndex()
+        elseif newstate == "vehicle" then
+            page = GetVehicleBarIndex()
+        elseif newstate == "possess" then
+            page = 12
+        else
+            page = tonumber(newstate) or 1
+        end
+
+        for i = 1, 12 do
+            local button = self:GetFrameRef("button" .. i)
+            if button then
+                button:SetAttribute("action", (page - 1) * 12 + i)
+            end
+        end
+    ]])
+
+    -- Macro condition string evaluated by the secure state system.
+    -- [overridebar] fires for dragonriding / special mounts.
+    RegisterStateDriver(stateDriverFrame, "page",
+        "[overridebar] override; [vehicleui] vehicle; [possessbar] possess; " ..
+        "[bonusbar:5] 11; [bonusbar:4] 10; [bonusbar:3] 9; [bonusbar:2] 8; [bonusbar:1] 7; " ..
+        "[bar:2] 2; [bar:3] 3; [bar:4] 4; [bar:5] 5; [bar:6] 6; 1"
+    )
+end
 
 -- Initialize saved variables
 local function InitDB()
@@ -304,9 +270,17 @@ local function UpdateKeybinds()
     end
 end
 
+-- Flag: override bindings need to be (re)applied once combat ends
+local pendingBindingUpdate = false
+
 -- Function to setup override bindings
 local function UpdateOverrideBindings()
-    if InCombatLockdown() or not mainFrame then return end
+    if not mainFrame then return end
+    if InCombatLockdown() then
+        pendingBindingUpdate = true
+        return
+    end
+    pendingBindingUpdate = false
     
     ClearOverrideBindings(mainFrame)
     
@@ -777,6 +751,9 @@ local function CreateMainFrame()
         ApplyG13Layout(frame)
     end
 
+    -- Setup secure state driver for combat-safe page swapping
+    SetupSecurePageDriver()
+
     -- Apply overall frame alpha
     frame:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
 
@@ -795,9 +772,8 @@ local function CreateMainFrame()
     return frame
 end
 
--- Update all buttons - just refresh keybinds and paged actions
+-- Update all buttons - refresh keybinds (page swaps handled by secure state driver)
 local function UpdateButtons()
-    UpdatePagedActions()
     UpdateKeybinds()
 end
 
@@ -824,6 +800,7 @@ eventFrame:RegisterEvent("PLAYER_LEAVE_COMBAT")
 eventFrame:RegisterEvent("UNIT_ENTERED_VEHICLE")
 eventFrame:RegisterEvent("UNIT_EXITED_VEHICLE")
 eventFrame:RegisterEvent("UPDATE_OVERRIDE_ACTIONBAR")
+eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -837,7 +814,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             
             -- Setup override bindings and update keybinds after a delay to ensure buttons are ready
             C_Timer.After(1, function()
-                UpdatePagedActions()  -- Initial page setup
                 UpdateOverrideBindings()
                 UpdateKeybinds()
             end)
@@ -851,7 +827,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "PLAYER_ENTERING_WORLD" then
         HideDefaultBars()
         C_Timer.After(0.5, function()
-            UpdatePagedActions()
             UpdateButtons()
         end)
         
@@ -863,10 +838,17 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         -- Just update keybinds and paged actions
         UpdateButtons()
         
-    elseif event == "ACTIONBAR_UPDATE_COOLDOWN" or 
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        -- Combat ended: apply any override bindings that were deferred
+        if pendingBindingUpdate then
+            UpdateOverrideBindings()
+            UpdateKeybinds()
+        end
+
+    elseif event == "ACTIONBAR_UPDATE_COOLDOWN" or
            event == "ACTIONBAR_UPDATE_USABLE" or event == "SPELL_UPDATE_USABLE" or
            event == "ACTIONBAR_UPDATE_STATE" or event == "SPELL_UPDATE_CHARGES" or
-           event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_ENTER_COMBAT" or 
+           event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_ENTER_COMBAT" or
            event == "PLAYER_LEAVE_COMBAT" then
         -- ActionBarButtonTemplate handles these automatically - no action needed
     end
