@@ -910,13 +910,212 @@ end
 
 -- Create config window
 local configFrame
+
+-- Modern UI color palette
+local UI = {
+    bg        = { 0.10, 0.10, 0.12, 0.95 },
+    header    = { 0.13, 0.13, 0.16, 1 },
+    accent    = { 0.30, 0.75, 0.75, 1 },      -- teal accent
+    accentDim = { 0.20, 0.50, 0.50, 1 },
+    text      = { 0.90, 0.90, 0.90, 1 },
+    textDim   = { 0.55, 0.55, 0.58, 1 },
+    section   = { 0.16, 0.16, 0.19, 1 },
+    border    = { 0.22, 0.22, 0.26, 1 },
+    sliderBg  = { 0.18, 0.18, 0.22, 1 },
+    sliderFill= { 0.30, 0.75, 0.75, 0.6 },
+    btnNormal = { 0.18, 0.18, 0.22, 1 },
+    btnHover  = { 0.24, 0.24, 0.28, 1 },
+    btnPress  = { 0.14, 0.14, 0.17, 1 },
+    checkOn   = { 0.30, 0.75, 0.75, 1 },
+    checkOff  = { 0.22, 0.22, 0.26, 1 },
+}
+
+-- Helper: create a flat, modern slider
+local function CreateModernSlider(parent, name, labelText, minVal, maxVal, curVal, step, width, formatFunc, onChange)
+    local container = CreateFrame("Frame", nil, parent)
+    container:SetSize(width, 42)
+
+    -- Label (left)
+    local label = container:CreateFontString(nil, "OVERLAY")
+    label:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    label:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
+    label:SetPoint("TOPLEFT", 0, 0)
+    label:SetText(labelText)
+
+    -- Value readout (right)
+    local valueText = container:CreateFontString(nil, "OVERLAY")
+    valueText:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    valueText:SetTextColor(UI.accent[1], UI.accent[2], UI.accent[3])
+    valueText:SetPoint("TOPRIGHT", 0, 0)
+
+    -- Track background
+    local trackBg = container:CreateTexture(nil, "BACKGROUND")
+    trackBg:SetHeight(4)
+    trackBg:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -10)
+    trackBg:SetPoint("RIGHT", container, "RIGHT", 0, 0)
+    trackBg:SetColorTexture(UI.sliderBg[1], UI.sliderBg[2], UI.sliderBg[3], UI.sliderBg[4])
+
+    -- Filled portion of the track
+    local trackFill = container:CreateTexture(nil, "ARTWORK")
+    trackFill:SetHeight(4)
+    trackFill:SetPoint("LEFT", trackBg, "LEFT")
+    trackFill:SetColorTexture(UI.sliderFill[1], UI.sliderFill[2], UI.sliderFill[3], UI.sliderFill[4])
+
+    -- Actual slider (invisible native thumb, overlaid)
+    local slider = CreateFrame("Slider", name, container, "MinimalSliderTemplate")
+    slider:SetPoint("TOPLEFT", trackBg, "TOPLEFT", 0, 6)
+    slider:SetPoint("BOTTOMRIGHT", trackBg, "BOTTOMRIGHT", 0, -6)
+    slider:SetMinMaxValues(minVal, maxVal)
+    slider:SetValue(curVal)
+    slider:SetValueStep(step)
+    slider:SetObeyStepOnDrag(true)
+
+    -- Custom thumb texture
+    local thumb = slider:GetThumbTexture() or slider:CreateTexture(nil, "OVERLAY")
+    thumb:SetSize(14, 14)
+    thumb:SetColorTexture(UI.accent[1], UI.accent[2], UI.accent[3], 1)
+    slider:SetThumbTexture(thumb)
+
+    -- Remove default slider background if present
+    if slider.NineSlice then slider.NineSlice:Hide() end
+    if slider.Background then slider.Background:Hide() end
+
+    local function updateFill(val)
+        local pct = (val - minVal) / (maxVal - minVal)
+        trackFill:SetWidth(math.max(1, pct * trackBg:GetWidth()))
+    end
+
+    local function formatValue(val)
+        return formatFunc and formatFunc(val) or tostring(val)
+    end
+
+    valueText:SetText(formatValue(curVal))
+    slider:SetScript("OnValueChanged", function(self, value)
+        value = math.floor(value / step + 0.5) * step
+        valueText:SetText(formatValue(value))
+        updateFill(value)
+        if onChange then onChange(value) end
+    end)
+
+    -- Defer initial fill width until layout is done
+    C_Timer.After(0, function() updateFill(curVal) end)
+
+    container.slider = slider
+    container.valueText = valueText
+    return container
+end
+
+-- Helper: create a modern checkbox (flat toggle style)
+local function CreateModernCheck(parent, labelText, checked, onClick)
+    local container = CreateFrame("Frame", nil, parent)
+    container:SetSize(200, 22)
+
+    local box = CreateFrame("Button", nil, container)
+    box:SetSize(18, 18)
+    box:SetPoint("LEFT", 0, 0)
+
+    local boxBg = box:CreateTexture(nil, "BACKGROUND")
+    boxBg:SetAllPoints()
+    boxBg:SetColorTexture(UI.checkOff[1], UI.checkOff[2], UI.checkOff[3], UI.checkOff[4])
+
+    local checkmark = box:CreateTexture(nil, "OVERLAY")
+    checkmark:SetSize(12, 12)
+    checkmark:SetPoint("CENTER")
+    checkmark:SetColorTexture(UI.checkOn[1], UI.checkOn[2], UI.checkOn[3], UI.checkOn[4])
+
+    local label = container:CreateFontString(nil, "OVERLAY")
+    label:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    label:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
+    label:SetPoint("LEFT", box, "RIGHT", 8, 0)
+    label:SetText(labelText)
+
+    container.isChecked = checked
+    local function updateVisual()
+        if container.isChecked then
+            checkmark:Show()
+            boxBg:SetColorTexture(UI.accentDim[1], UI.accentDim[2], UI.accentDim[3], 0.3)
+        else
+            checkmark:Hide()
+            boxBg:SetColorTexture(UI.checkOff[1], UI.checkOff[2], UI.checkOff[3], UI.checkOff[4])
+        end
+    end
+    updateVisual()
+
+    box:SetScript("OnClick", function()
+        container.isChecked = not container.isChecked
+        updateVisual()
+        if onClick then onClick(container.isChecked) end
+    end)
+
+    container.SetChecked = function(self, val)
+        self.isChecked = val
+        updateVisual()
+    end
+    container.GetChecked = function(self) return self.isChecked end
+
+    return container
+end
+
+-- Helper: modern flat button
+local function CreateModernButton(parent, text, width, height, onClick)
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetSize(width, height)
+
+    local bg = btn:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(UI.btnNormal[1], UI.btnNormal[2], UI.btnNormal[3], UI.btnNormal[4])
+    btn.bg = bg
+
+    local label = btn:CreateFontString(nil, "OVERLAY")
+    label:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    label:SetTextColor(UI.accent[1], UI.accent[2], UI.accent[3])
+    label:SetPoint("CENTER")
+    label:SetText(text)
+    btn.label = label
+
+    btn:SetScript("OnEnter", function() bg:SetColorTexture(UI.btnHover[1], UI.btnHover[2], UI.btnHover[3], UI.btnHover[4]) end)
+    btn:SetScript("OnLeave", function() bg:SetColorTexture(UI.btnNormal[1], UI.btnNormal[2], UI.btnNormal[3], UI.btnNormal[4]) end)
+    btn:SetScript("OnMouseDown", function() bg:SetColorTexture(UI.btnPress[1], UI.btnPress[2], UI.btnPress[3], UI.btnPress[4]) end)
+    btn:SetScript("OnMouseUp", function() bg:SetColorTexture(UI.btnHover[1], UI.btnHover[2], UI.btnHover[3], UI.btnHover[4]) end)
+    btn:SetScript("OnClick", onClick)
+
+    btn.SetText = function(self, t) self.label:SetText(t) end
+
+    return btn
+end
+
+-- Helper: section header line
+local function CreateSectionHeader(parent, text)
+    local container = CreateFrame("Frame", nil, parent)
+    container:SetSize(1, 20)
+
+    local label = container:CreateFontString(nil, "OVERLAY")
+    label:SetFont("Fonts\\FRIZQT__.TTF", 10, "")
+    label:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
+    label:SetPoint("LEFT", 0, 0)
+    label:SetText(string.upper(text))
+
+    local line = container:CreateTexture(nil, "ARTWORK")
+    line:SetHeight(1)
+    line:SetPoint("LEFT", label, "RIGHT", 8, 0)
+    line:SetPoint("RIGHT", container, "RIGHT")
+    line:SetColorTexture(UI.border[1], UI.border[2], UI.border[3], 0.5)
+
+    return container
+end
+
 CreateConfigWindow = function()
     if configFrame then
         return
     end
-    
-    configFrame = CreateFrame("Frame", "JG13_ConfigFrame", UIParent, "BasicFrameTemplateWithInset")
-    configFrame:SetSize(400, 780)
+
+    local PANEL_WIDTH = 380
+    local CONTENT_WIDTH = PANEL_WIDTH - 40  -- 20px padding each side
+    local PANEL_HEIGHT = 540
+
+    -- Main frame (no Blizzard template)
+    configFrame = CreateFrame("Frame", "JG13_ConfigFrame", UIParent, "BackdropTemplate")
+    configFrame:SetSize(PANEL_WIDTH, PANEL_HEIGHT)
     configFrame:SetPoint("CENTER")
     configFrame:SetMovable(true)
     configFrame:EnableMouse(true)
@@ -924,174 +1123,205 @@ CreateConfigWindow = function()
     configFrame:SetScript("OnDragStart", configFrame.StartMoving)
     configFrame:SetScript("OnDragStop", configFrame.StopMovingOrSizing)
     configFrame:SetFrameStrata("DIALOG")
-    
-    configFrame.title = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    configFrame.title:SetPoint("TOP", configFrame, "TOP", 0, -5)
-    configFrame.title:SetText("Jar's G13 Bars Configuration")
-    
-    -- Position label
-    local posLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    posLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 20, -40)
-    posLabel:SetText("Vertical Position:")
-    
+
+    -- Dark background with thin border
+    configFrame:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        edgeSize = 1,
+    })
+    configFrame:SetBackdropColor(UI.bg[1], UI.bg[2], UI.bg[3], UI.bg[4])
+    configFrame:SetBackdropBorderColor(UI.border[1], UI.border[2], UI.border[3], UI.border[4])
+
+    -- Title bar area
+    local titleBar = CreateFrame("Frame", nil, configFrame)
+    titleBar:SetHeight(36)
+    titleBar:SetPoint("TOPLEFT", 0, 0)
+    titleBar:SetPoint("TOPRIGHT", 0, 0)
+    local titleBg = titleBar:CreateTexture(nil, "BACKGROUND")
+    titleBg:SetAllPoints()
+    titleBg:SetColorTexture(UI.header[1], UI.header[2], UI.header[3], UI.header[4])
+
+    local titleText = titleBar:CreateFontString(nil, "OVERLAY")
+    titleText:SetFont("Fonts\\FRIZQT__.TTF", 13, "")
+    titleText:SetTextColor(UI.accent[1], UI.accent[2], UI.accent[3])
+    titleText:SetPoint("LEFT", 16, 0)
+    titleText:SetText("Jar's G13 Bars")
+
+    -- Close button (minimal X)
+    local closeBtn = CreateFrame("Button", nil, titleBar)
+    closeBtn:SetSize(36, 36)
+    closeBtn:SetPoint("RIGHT", 0, 0)
+    local closeTxt = closeBtn:CreateFontString(nil, "OVERLAY")
+    closeTxt:SetFont("Fonts\\FRIZQT__.TTF", 16, "")
+    closeTxt:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
+    closeTxt:SetPoint("CENTER")
+    closeTxt:SetText("x")
+    closeBtn:SetScript("OnEnter", function() closeTxt:SetTextColor(1, 0.4, 0.4) end)
+    closeBtn:SetScript("OnLeave", function() closeTxt:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3]) end)
+    closeBtn:SetScript("OnClick", function() configFrame:Hide() end)
+
+    -- Scroll frame for content (prevents overflow)
+    local scrollFrame = CreateFrame("ScrollFrame", nil, configFrame, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 20, -2)
+    scrollFrame:SetPoint("BOTTOMRIGHT", configFrame, "BOTTOMRIGHT", -32, 4)
+
+    -- Hide the default scroll bar textures for a cleaner look
+    if scrollFrame.ScrollBar then
+        local sb = scrollFrame.ScrollBar
+        if sb.Background then sb.Background:Hide() end
+    end
+
+    local content = CreateFrame("Frame", nil, scrollFrame)
+    content:SetWidth(CONTENT_WIDTH)
+    scrollFrame:SetScrollChild(content)
+
+    local yPos = -16  -- starting offset inside content
+    local SPACING = 14
+    local SECTION_SPACING = 22
+
+    local function advanceY(amount) yPos = yPos - amount end
+    local function placeWidget(widget, height)
+        widget:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
+        widget:SetWidth(CONTENT_WIDTH)
+        advanceY((height or 42) + SPACING)
+    end
+
+    -- === APPEARANCE SECTION ===
+    local sec1 = CreateSectionHeader(content, "Appearance")
+    placeWidget(sec1, 20)
+
     -- Position slider
-    local posSlider = CreateFrame("Slider", "JG13_PositionSlider", configFrame, "OptionsSliderTemplate")
-    posSlider:SetPoint("TOPLEFT", posLabel, "BOTTOMLEFT", 0, -20)
-    posSlider:SetMinMaxValues(-2400, 0)
-    posSlider:SetValue(JarsG13BarsDB.position.y)
-    posSlider:SetValueStep(1)
-    posSlider:SetObeyStepOnDrag(true)
-    posSlider:SetWidth(350)
-    
-    -- Slider text
-    posSlider.Low:SetText("Bottom")
-    posSlider.High:SetText("Top")
-    posSlider.Text:SetText(JarsG13BarsDB.position.y)
-    
-    posSlider:SetScript("OnValueChanged", function(self, value)
-        value = math.floor(value)
-        self.Text:SetText(value)
-        UpdateFramePosition(value)
-    end)
-    
-    -- Background opacity label
-    local opacityLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    opacityLabel:SetPoint("TOPLEFT", posSlider, "BOTTOMLEFT", 0, -30)
-    opacityLabel:SetText("Background Opacity:")
-    
-    -- Opacity slider
-    local opacitySlider = CreateFrame("Slider", "JG13_OpacitySlider", configFrame, "OptionsSliderTemplate")
-    opacitySlider:SetPoint("TOPLEFT", opacityLabel, "BOTTOMLEFT", 0, -20)
-    opacitySlider:SetMinMaxValues(0, 1)
-    opacitySlider:SetValue(JarsG13BarsDB.bgOpacity or 0.3)
-    opacitySlider:SetValueStep(0.05)
-    opacitySlider:SetObeyStepOnDrag(true)
-    opacitySlider:SetWidth(350)
-    
-    -- Opacity slider text
-    opacitySlider.Low:SetText("Transparent")
-    opacitySlider.High:SetText("Opaque")
-    opacitySlider.Text:SetText(string.format("%.0f%%", (JarsG13BarsDB.bgOpacity or 0.3) * 100))
-    
-    opacitySlider:SetScript("OnValueChanged", function(self, value)
-        value = math.floor(value / 0.05 + 0.5) * 0.05  -- Round to nearest 0.05
-        self.Text:SetText(string.format("%.0f%%", value * 100))
-        UpdateBackgroundOpacity(value)
-    end)
-    
-    -- Scale label
-    local scaleLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    scaleLabel:SetPoint("TOPLEFT", opacitySlider, "BOTTOMLEFT", 0, -40)
-    scaleLabel:SetText("Scale:")
-    
+    local posSlider = CreateModernSlider(content, "JG13_PositionSlider", "Vertical Position",
+        -2400, 0, JarsG13BarsDB.position.y, 1, CONTENT_WIDTH,
+        function(v) return tostring(math.floor(v)) end,
+        function(v) UpdateFramePosition(math.floor(v)) end)
+    placeWidget(posSlider, 42)
+
+    -- Background opacity slider
+    local opacitySlider = CreateModernSlider(content, "JG13_OpacitySlider", "Background Opacity",
+        0, 1, JarsG13BarsDB.bgOpacity or 0.3, 0.05, CONTENT_WIDTH,
+        function(v) return string.format("%.0f%%", v * 100) end,
+        function(v) UpdateBackgroundOpacity(v) end)
+    placeWidget(opacitySlider, 42)
+
     -- Scale slider
-    local scaleSlider = CreateFrame("Slider", "JG13_ScaleSlider", configFrame, "OptionsSliderTemplate")
-    scaleSlider:SetPoint("TOPLEFT", scaleLabel, "BOTTOMLEFT", 0, -20)
-    scaleSlider:SetMinMaxValues(0.5, 1.0)
-    scaleSlider:SetValue(JarsG13BarsDB.scale or 1.0)
-    scaleSlider:SetValueStep(0.05)
-    scaleSlider:SetObeyStepOnDrag(true)
-    scaleSlider:SetWidth(350)
-    
-    -- Scale slider text
-    scaleSlider.Low:SetText("50%")
-    scaleSlider.High:SetText("100%")
-    scaleSlider.Text:SetText(string.format("%.0f%%", (JarsG13BarsDB.scale or 1.0) * 100))
-    
-    scaleSlider:SetScript("OnValueChanged", function(self, value)
-        value = math.floor(value / 0.05 + 0.5) * 0.05  -- Round to nearest 0.05
-        self.Text:SetText(string.format("%.0f%%", value * 100))
-        UpdateScale(value)
-    end)
+    local scaleSlider = CreateModernSlider(content, "JG13_ScaleSlider", "Scale",
+        0.5, 1.0, JarsG13BarsDB.scale or 1.0, 0.05, CONTENT_WIDTH,
+        function(v) return string.format("%.0f%%", v * 100) end,
+        function(v) UpdateScale(v) end)
+    placeWidget(scaleSlider, 42)
 
-    -- Frame Alpha (overall transparency) label
-    local alphaLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    alphaLabel:SetPoint("TOPLEFT", scaleSlider, "BOTTOMLEFT", 0, -40)
-    alphaLabel:SetText("Overall Transparency:")
+    -- Overall transparency slider
+    local alphaSlider = CreateModernSlider(content, "JG13_AlphaSlider", "Overall Transparency",
+        0, 1, JarsG13BarsDB.frameAlpha or 1.0, 0.05, CONTENT_WIDTH,
+        function(v) return string.format("%.0f%%", v * 100) end,
+        function(v) UpdateFrameAlpha(v) end)
+    placeWidget(alphaSlider, 42)
 
-    -- Frame Alpha slider
-    local alphaSlider = CreateFrame("Slider", "JG13_AlphaSlider", configFrame, "OptionsSliderTemplate")
-    alphaSlider:SetPoint("TOPLEFT", alphaLabel, "BOTTOMLEFT", 0, -20)
-    alphaSlider:SetMinMaxValues(0, 1)
-    alphaSlider:SetValue(JarsG13BarsDB.frameAlpha or 1.0)
-    alphaSlider:SetValueStep(0.05)
-    alphaSlider:SetObeyStepOnDrag(true)
-    alphaSlider:SetWidth(350)
+    -- === BEHAVIOR SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
+    local sec2 = CreateSectionHeader(content, "Behavior")
+    placeWidget(sec2, 20)
 
-    -- Alpha slider text
-    alphaSlider.Low:SetText("Invisible")
-    alphaSlider.High:SetText("Full")
-    alphaSlider.Text:SetText(string.format("%.0f%%", (JarsG13BarsDB.frameAlpha or 1.0) * 100))
+    -- Hide on mouse out
+    local hideCheck = CreateModernCheck(content, "Hide unless moused over", JarsG13BarsDB.hideOnMouseOut,
+        function(checked) ApplyHideOnMouseOut(checked) end)
+    placeWidget(hideCheck, 22)
 
-    alphaSlider:SetScript("OnValueChanged", function(self, value)
-        value = math.floor(value / 0.05 + 0.5) * 0.05  -- Round to nearest 0.05
-        self.Text:SetText(string.format("%.0f%%", value * 100))
-        UpdateFrameAlpha(value)
-    end)
+    -- Show keybinds
+    local keybindsCheck = CreateModernCheck(content, "Show keybinds on buttons", JarsG13BarsDB.showKeybinds,
+        function(checked)
+            JarsG13BarsDB.showKeybinds = checked
+            UpdateKeybinds()
+        end)
+    placeWidget(keybindsCheck, 22)
 
-    -- Hide on mouse out checkbox
-    local hideCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
-    hideCheck:SetPoint("TOPLEFT", alphaSlider, "BOTTOMLEFT", -10, -10)
-    hideCheck.text = hideCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    hideCheck.text:SetPoint("LEFT", hideCheck, "RIGHT", 5, 0)
-    hideCheck.text:SetText("Hide unless moused over")
-    hideCheck:SetChecked(JarsG13BarsDB.hideOnMouseOut)
-    hideCheck:SetScript("OnClick", function(self)
-        ApplyHideOnMouseOut(self:GetChecked())
-    end)
+    -- === LAYOUT SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
+    local sec3 = CreateSectionHeader(content, "Layout")
+    placeWidget(sec3, 20)
 
-    -- Layout mode dropdown
-    local layoutLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    layoutLabel:SetPoint("TOPLEFT", hideCheck, "BOTTOMLEFT", 10, -10)
-    layoutLabel:SetText("Layout Mode:")
-    
-    local layoutDropdown = CreateFrame("DropdownButton", nil, configFrame, "WowStyle1DropdownTemplate")
-    layoutDropdown:SetPoint("TOPLEFT", layoutLabel, "TOPRIGHT", 5, 3)
-    layoutDropdown:SetWidth(130)
-    layoutDropdown:SetDefaultText(JarsG13BarsDB.layoutMode or "G13")
-    layoutDropdown:SetupMenu(function(_, rootDescription)
-        local layouts = { "G13", "Keyzen" }
-        for _, name in ipairs(layouts) do
-            rootDescription:CreateRadio(name,
-                function() return JarsG13BarsDB.layoutMode == name end,
-                function()
-                    JarsG13BarsDB.layoutMode = name
-                    if mainFrame then
-                        if name == "Keyzen" then
-                            ApplyKeyzenLayout(mainFrame)
-                        else
-                            ApplyG13Layout(mainFrame)
-                        end
-                    end
-                end)
+    -- Layout mode buttons (radio-style toggle)
+    local layoutRow = CreateFrame("Frame", nil, content)
+    layoutRow:SetSize(CONTENT_WIDTH, 30)
+    placeWidget(layoutRow, 30)
+
+    local layoutLbl = layoutRow:CreateFontString(nil, "OVERLAY")
+    layoutLbl:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    layoutLbl:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
+    layoutLbl:SetPoint("LEFT", 0, 0)
+    layoutLbl:SetText("Mode:")
+
+    local function createLayoutToggle(parent, text, x, isActive, onClick)
+        local btn = CreateFrame("Button", nil, parent)
+        btn:SetSize(80, 28)
+        btn:SetPoint("LEFT", x, 0)
+        local bg = btn:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        btn.bg = bg
+        local lbl = btn:CreateFontString(nil, "OVERLAY")
+        lbl:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+        lbl:SetPoint("CENTER")
+        lbl:SetText(text)
+        btn.label = lbl
+        btn.SetActive = function(self, active)
+            if active then
+                bg:SetColorTexture(UI.accentDim[1], UI.accentDim[2], UI.accentDim[3], 0.4)
+                lbl:SetTextColor(UI.accent[1], UI.accent[2], UI.accent[3])
+            else
+                bg:SetColorTexture(UI.btnNormal[1], UI.btnNormal[2], UI.btnNormal[3], UI.btnNormal[4])
+                lbl:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
+            end
         end
+        btn:SetScript("OnClick", onClick)
+        btn:SetActive(isActive)
+        return btn
+    end
+
+    local g13Btn, keyzenBtn
+    g13Btn = createLayoutToggle(layoutRow, "G13", 50, JarsG13BarsDB.layoutMode == "G13", function()
+        JarsG13BarsDB.layoutMode = "G13"
+        g13Btn:SetActive(true)
+        keyzenBtn:SetActive(false)
+        if mainFrame then ApplyG13Layout(mainFrame) end
     end)
-    
-    -- Reset button
-    local resetBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
-    resetBtn:SetSize(150, 25)
-    resetBtn:SetPoint("TOP", layoutDropdown, "BOTTOM", 0, -10)
-    resetBtn:SetText("Reset to Default")
-    resetBtn:SetScript("OnClick", function()
-        posSlider:SetValue(-400)
-        opacitySlider:SetValue(0.3)
-        scaleSlider:SetValue(1.0)
-        alphaSlider:SetValue(1.0)
-        hideCheck:SetChecked(false)
-        UpdateFramePosition(-400)
-        UpdateBackgroundOpacity(0.3)
-        UpdateScale(1.0)
-        UpdateFrameAlpha(1.0)
-        ApplyHideOnMouseOut(false)
-        print("|cff00ff00Jar's G13 Bars|r: Settings reset to default.")
+    keyzenBtn = createLayoutToggle(layoutRow, "Keyzen", 136, JarsG13BarsDB.layoutMode == "Keyzen", function()
+        JarsG13BarsDB.layoutMode = "Keyzen"
+        g13Btn:SetActive(false)
+        keyzenBtn:SetActive(true)
+        if mainFrame then ApplyKeyzenLayout(mainFrame) end
     end)
-    
-    -- Set Keybinds button
-    local keybindBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
-    keybindBtn:SetSize(150, 25)
-    keybindBtn:SetPoint("TOP", resetBtn, "BOTTOM", 0, -10)
-    keybindBtn:SetText("Set Keybinds")
-    keybindBtn:SetScript("OnClick", function()
+
+    -- === BLIZZARD BARS SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
+    local sec4 = CreateSectionHeader(content, "Blizzard Bars")
+    placeWidget(sec4, 20)
+
+    local barNames = {
+        {key = "MainActionBar", label = "Hide Main Bar (Bar 1)"},
+    }
+
+    for _, barInfo in ipairs(barNames) do
+        if JarsG13BarsDB.hideBars[barInfo.key] == nil then
+            JarsG13BarsDB.hideBars[barInfo.key] = true
+        end
+        local barCheck = CreateModernCheck(content, barInfo.label, JarsG13BarsDB.hideBars[barInfo.key],
+            function(checked)
+                JarsG13BarsDB.hideBars[barInfo.key] = checked
+                HideDefaultBars()
+            end)
+        placeWidget(barCheck, 22)
+    end
+
+    -- === ACTIONS SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
+    local sec5 = CreateSectionHeader(content, "Actions")
+    placeWidget(sec5, 20)
+
+    -- Keybind button (forward-declared so the closure can reference it)
+    local keybindBtn
+    keybindBtn = CreateModernButton(content, "Set Keybinds", 160, 30, function()
         if LibKeyBound then
             if LibKeyBound:IsShown() then
                 LibKeyBound:Toggle()
@@ -1103,7 +1333,8 @@ CreateConfigWindow = function()
             end
         end
     end)
-    
+    placeWidget(keybindBtn, 30)
+
     -- Update button text when LibKeyBound state changes
     LibKeyBound.RegisterCallback(keybindBtn, "LIBKEYBOUND_ENABLED", function()
         keybindBtn:SetText("Exit Keybind Mode")
@@ -1111,49 +1342,32 @@ CreateConfigWindow = function()
     LibKeyBound.RegisterCallback(keybindBtn, "LIBKEYBOUND_DISABLED", function()
         keybindBtn:SetText("Set Keybinds")
     end)
-    
-    -- Action Bar Hide Checkboxes
-    -- Show Keybinds checkbox
-    local keybindsCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
-    keybindsCheck:SetPoint("TOPLEFT", keybindBtn, "BOTTOMLEFT", -110, -10)
-    keybindsCheck.text = keybindsCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    keybindsCheck.text:SetPoint("LEFT", keybindsCheck, "RIGHT", 5, 0)
-    keybindsCheck.text:SetText("Show Keybinds")
-    keybindsCheck:SetChecked(JarsG13BarsDB.showKeybinds)
-    keybindsCheck:SetScript("OnClick", function(self)
-        JarsG13BarsDB.showKeybinds = self:GetChecked()
+
+    -- Reset button
+    local resetBtn = CreateModernButton(content, "Reset to Defaults", 160, 30, function()
+        posSlider.slider:SetValue(-400)
+        opacitySlider.slider:SetValue(0.3)
+        scaleSlider.slider:SetValue(1.0)
+        alphaSlider.slider:SetValue(1.0)
+        hideCheck:SetChecked(false)
+        keybindsCheck:SetChecked(true)
+        UpdateFramePosition(-400)
+        UpdateBackgroundOpacity(0.3)
+        UpdateScale(1.0)
+        UpdateFrameAlpha(1.0)
+        ApplyHideOnMouseOut(false)
+        JarsG13BarsDB.showKeybinds = true
         UpdateKeybinds()
+        print("|cff00ff00Jar's G13 Bars|r: Settings reset to default.")
     end)
-    
-    local barLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    barLabel:SetPoint("TOPLEFT", keybindsCheck, "BOTTOMLEFT", 20, -20)
-    barLabel:SetText("Hide Blizzard Main Action Bar:")
-    
-    local barNames = {
-        {key = "MainActionBar", label = "Main Bar (Bar 1)"},
-    }
-    
-    local yOffset = -50
-    for i, barInfo in ipairs(barNames) do
-        local check = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
-        check:SetPoint("TOPLEFT", barLabel, "BOTTOMLEFT", 20, -10)
-        check.text = check:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        check.text:SetPoint("LEFT", check, "RIGHT", 5, 0)
-        check.text:SetText(barInfo.label)
-        
-        -- Initialize checkbox state only if it's nil (not set yet)
-        if JarsG13BarsDB.hideBars[barInfo.key] == nil then
-            JarsG13BarsDB.hideBars[barInfo.key] = true
-        end
-        check:SetChecked(JarsG13BarsDB.hideBars[barInfo.key])
-        
-        check:SetScript("OnClick", function(self)
-            JarsG13BarsDB.hideBars[barInfo.key] = self:GetChecked()
-            HideDefaultBars()
-        end)
-    end
-    
-    -- Close button (already provided by BasicFrameTemplateWithInset)
+    placeWidget(resetBtn, 30)
+
+    -- Set total content height so scroll works
+    content:SetHeight(math.abs(yPos) + 20)
+
+    -- Make frame close with Escape
+    tinsert(UISpecialFrames, "JG13_ConfigFrame")
+
     configFrame:Hide()
 end
 
