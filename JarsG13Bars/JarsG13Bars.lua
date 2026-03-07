@@ -14,6 +14,11 @@ local BOTTOM_SIZE = 40       -- 50% of primary (doubled from 20)
 local PADDING = 6            -- Padding between buttons
 local SNAP_DISTANCE = 20     -- Distance to snap to center
 
+-- Profile system
+local MAX_LAYOUTS = 100
+local currentLayoutName = nil
+local activeProfile = {}
+
 -- Frame references
 local mainFrame
 local buttons = {}
@@ -61,56 +66,19 @@ local function SetupSecurePageDriver()
     )
 end
 
--- Initialize saved variables
-local function InitDB()
-    if not JarsG13BarsDB then
-        JarsG13BarsDB = {}
-    end
-    
-    if not JarsG13BarsDB.position then
-        JarsG13BarsDB.position = { y = -400 }  -- Default lower on screen
-    end
-    
-    -- Ensure Y value exists
-    if not JarsG13BarsDB.position.y then
-        JarsG13BarsDB.position.y = -400
-    end
-    
-    -- Default background opacity
-    if not JarsG13BarsDB.bgOpacity then
-        JarsG13BarsDB.bgOpacity = 0.3
-    end
-    
-    -- Default show keybinds setting
-    if JarsG13BarsDB.showKeybinds == nil then
-        JarsG13BarsDB.showKeybinds = true
-    end
-    
-    -- Default scale
-    if not JarsG13BarsDB.scale then
-        JarsG13BarsDB.scale = 1.0  -- 100%
-    end
-    
-    -- Default layout mode
-    if not JarsG13BarsDB.layoutMode then
-        JarsG13BarsDB.layoutMode = "G13"  -- G13 or Keyzen
-    end
-
-    -- Default frame alpha (overall transparency)
-    if not JarsG13BarsDB.frameAlpha then
-        JarsG13BarsDB.frameAlpha = 1.0
-    end
-
-    -- Default hide on mouse out
-    if JarsG13BarsDB.hideOnMouseOut == nil then
-        JarsG13BarsDB.hideOnMouseOut = false
-    end
-    
-    -- Default hide bars settings (hide all by default)
-    if not JarsG13BarsDB.hideBars then
-        JarsG13BarsDB.hideBars = {
+-- Create a default profile with all look/feel settings
+local function CreateDefaultProfile()
+    return {
+        positionY = -400,
+        bgOpacity = 0.3,
+        showKeybinds = true,
+        scale = 1.0,
+        layoutMode = "G13",
+        frameAlpha = 1.0,
+        hideOnMouseOut = false,
+        hideBars = {
             MainMenuBar = true,
-            MainActionBar = true,  -- New in 12.0+
+            MainActionBar = true,
             MultiBarBottomLeft = true,
             MultiBarBottomRight = true,
             MultiBarRight = true,
@@ -118,7 +86,277 @@ local function InitDB()
             MultiBar5 = true,
             MultiBar6 = true,
             MultiBar7 = true,
-        }
+        },
+    }
+end
+
+-- Deep copy a profile table
+local function CopyProfile(src)
+    local copy = {
+        positionY = src.positionY or -400,
+        bgOpacity = src.bgOpacity or 0.3,
+        showKeybinds = src.showKeybinds ~= false,
+        scale = src.scale or 1.0,
+        layoutMode = src.layoutMode or "G13",
+        frameAlpha = src.frameAlpha or 1.0,
+        hideOnMouseOut = src.hideOnMouseOut or false,
+        hideBars = {},
+    }
+    if src.hideBars then
+        for k, v in pairs(src.hideBars) do
+            copy.hideBars[k] = v
+        end
+    end
+    return copy
+end
+
+-- Get current spec ID (returns 0 if not available)
+local function GetCurrentSpecID()
+    if GetSpecialization then
+        local spec = GetSpecialization()
+        if spec then
+            return GetSpecializationInfo(spec) or 0
+        end
+    end
+    return 0
+end
+
+-- Get current spec name
+local function GetCurrentSpecName()
+    if GetSpecialization then
+        local spec = GetSpecialization()
+        if spec then
+            local _, name = GetSpecializationInfo(spec)
+            return name or "Unknown"
+        end
+    end
+    return "Unknown"
+end
+
+-- Forward declarations for profile UI refresh
+local RefreshConfigUI
+
+-- Count saved layouts
+local function CountLayouts()
+    local count = 0
+    for _ in pairs(JarsG13BarsDB.layouts) do
+        count = count + 1
+    end
+    return count
+end
+
+-- Get sorted layout names
+local function GetSortedLayoutNames()
+    local names = {}
+    for name in pairs(JarsG13BarsDB.layouts) do
+        tinsert(names, name)
+    end
+    table.sort(names)
+    return names
+end
+
+-- Apply the active profile to the live UI
+local function ApplyActiveProfile()
+    if not mainFrame then return end
+
+    -- Position
+    mainFrame:ClearAllPoints()
+    mainFrame:SetPoint("TOP", UIParent, "TOP", 0, activeProfile.positionY or -400)
+
+    -- Scale
+    mainFrame:SetScale(activeProfile.scale or 1.0)
+
+    -- Background opacity
+    if mainFrame.bg then
+        mainFrame.bg:SetColorTexture(0, 0, 0, activeProfile.bgOpacity or 0.3)
+    end
+
+    -- Frame alpha + hide on mouse out
+    if activeProfile.hideOnMouseOut then
+        mainFrame:SetAlpha(0)
+        mainFrame:SetScript("OnUpdate", function(self)
+            if self:IsMouseOver() then
+                self:SetAlpha(activeProfile.frameAlpha or 1.0)
+            else
+                self:SetAlpha(0)
+            end
+        end)
+    else
+        mainFrame:SetAlpha(activeProfile.frameAlpha or 1.0)
+        mainFrame:SetScript("OnUpdate", nil)
+    end
+
+    -- Layout mode
+    if activeProfile.layoutMode == "Keyzen" then
+        ApplyKeyzenLayout(mainFrame)
+    else
+        ApplyG13Layout(mainFrame)
+    end
+end
+
+-- Persist the current in-memory profile back to SavedVariables
+local function PersistActiveProfile()
+    if currentLayoutName and JarsG13BarsDB.layouts[currentLayoutName] then
+        JarsG13BarsDB.layouts[currentLayoutName] = CopyProfile(activeProfile)
+    end
+end
+
+-- Save current active profile as a named layout
+local function SaveLayout(name)
+    if not name or name == "" then
+        print("|cff00ff00Jar's G13 Bars|r: Please enter a layout name.")
+        return false
+    end
+
+    if CountLayouts() >= MAX_LAYOUTS and not JarsG13BarsDB.layouts[name] then
+        print("|cff00ff00Jar's G13 Bars|r: Maximum " .. MAX_LAYOUTS .. " layouts reached.")
+        return false
+    end
+
+    JarsG13BarsDB.layouts[name] = CopyProfile(activeProfile)
+    currentLayoutName = name
+    JarsG13BarsDB.lastActiveLayout = name
+
+    local specID = GetCurrentSpecID()
+    if specID and specID > 0 then
+        JarsG13BarsDB.specAssociations[specID] = name
+    end
+
+    print("|cff00ff00Jar's G13 Bars|r: Layout '" .. name .. "' saved" ..
+        (specID and specID > 0 and (" for " .. GetCurrentSpecName()) or "") .. ".")
+    if RefreshConfigUI then RefreshConfigUI() end
+    return true
+end
+
+-- Load a named layout into activeProfile
+local function LoadLayout(name)
+    if not name or not JarsG13BarsDB.layouts[name] then
+        print("|cff00ff00Jar's G13 Bars|r: Layout '" .. (name or "nil") .. "' not found.")
+        return false
+    end
+
+    activeProfile = CopyProfile(JarsG13BarsDB.layouts[name])
+    currentLayoutName = name
+    JarsG13BarsDB.lastActiveLayout = name
+
+    local specID = GetCurrentSpecID()
+    if specID and specID > 0 then
+        JarsG13BarsDB.specAssociations[specID] = name
+    end
+
+    print("|cff00ff00Jar's G13 Bars|r: Layout '" .. name .. "' loaded" ..
+        (specID and specID > 0 and (" for " .. GetCurrentSpecName()) or "") .. ".")
+    ApplyActiveProfile()
+    HideDefaultBars()
+    if RefreshConfigUI then RefreshConfigUI() end
+    return true
+end
+
+-- Load the layout associated with the current spec
+local function LoadSpecLayout()
+    local specID = GetCurrentSpecID()
+    if specID and specID > 0 then
+        local layoutName = JarsG13BarsDB.specAssociations[specID]
+        if layoutName and JarsG13BarsDB.layouts[layoutName] then
+            activeProfile = CopyProfile(JarsG13BarsDB.layouts[layoutName])
+            currentLayoutName = layoutName
+            print("|cff00ff00Jar's G13 Bars|r: Loaded layout '" .. layoutName .. "' for " .. GetCurrentSpecName() .. ".")
+            return
+        end
+    end
+
+    -- No spec association found - try to restore last active layout
+    local lastLayout = JarsG13BarsDB.lastActiveLayout
+    if lastLayout and JarsG13BarsDB.layouts[lastLayout] then
+        activeProfile = CopyProfile(JarsG13BarsDB.layouts[lastLayout])
+        currentLayoutName = lastLayout
+        print("|cff00ff00Jar's G13 Bars|r: Restored layout '" .. lastLayout .. "'.")
+        return
+    end
+
+    -- No layout found - use defaults
+    activeProfile = CreateDefaultProfile()
+    currentLayoutName = nil
+end
+
+-- Delete a named layout
+local function DeleteLayout(name)
+    if not name or not JarsG13BarsDB.layouts[name] then
+        return false
+    end
+
+    JarsG13BarsDB.layouts[name] = nil
+
+    for specID, layoutName in pairs(JarsG13BarsDB.specAssociations) do
+        if layoutName == name then
+            JarsG13BarsDB.specAssociations[specID] = nil
+        end
+    end
+
+    if currentLayoutName == name then
+        currentLayoutName = nil
+    end
+
+    if JarsG13BarsDB.lastActiveLayout == name then
+        JarsG13BarsDB.lastActiveLayout = nil
+    end
+
+    print("|cff00ff00Jar's G13 Bars|r: Layout '" .. name .. "' deleted.")
+    if RefreshConfigUI then RefreshConfigUI() end
+    return true
+end
+
+-- Initialize saved variables (migrate from flat to profile-based structure)
+local function InitDB()
+    if not JarsG13BarsDB then
+        JarsG13BarsDB = {}
+    end
+
+    -- Initialize profile tables
+    if not JarsG13BarsDB.layouts then
+        JarsG13BarsDB.layouts = {}
+    end
+    if not JarsG13BarsDB.specAssociations then
+        JarsG13BarsDB.specAssociations = {}
+    end
+    if not JarsG13BarsDB.lastActiveLayout then
+        JarsG13BarsDB.lastActiveLayout = nil
+    end
+
+    -- Migrate from old flat structure to profile-based
+    if JarsG13BarsDB.position or JarsG13BarsDB.bgOpacity or JarsG13BarsDB.scale then
+        local migrated = CreateDefaultProfile()
+
+        if JarsG13BarsDB.position and JarsG13BarsDB.position.y then
+            migrated.positionY = JarsG13BarsDB.position.y
+        end
+        if JarsG13BarsDB.bgOpacity then migrated.bgOpacity = JarsG13BarsDB.bgOpacity end
+        if JarsG13BarsDB.showKeybinds ~= nil then migrated.showKeybinds = JarsG13BarsDB.showKeybinds end
+        if JarsG13BarsDB.scale then migrated.scale = JarsG13BarsDB.scale end
+        if JarsG13BarsDB.layoutMode then migrated.layoutMode = JarsG13BarsDB.layoutMode end
+        if JarsG13BarsDB.frameAlpha then migrated.frameAlpha = JarsG13BarsDB.frameAlpha end
+        if JarsG13BarsDB.hideOnMouseOut ~= nil then migrated.hideOnMouseOut = JarsG13BarsDB.hideOnMouseOut end
+        if JarsG13BarsDB.hideBars then
+            migrated.hideBars = {}
+            for k, v in pairs(JarsG13BarsDB.hideBars) do
+                migrated.hideBars[k] = v
+            end
+        end
+
+        -- Save as "Default" layout
+        JarsG13BarsDB.layouts["Default"] = migrated
+
+        -- Clean up old flat keys
+        JarsG13BarsDB.position = nil
+        JarsG13BarsDB.bgOpacity = nil
+        JarsG13BarsDB.showKeybinds = nil
+        JarsG13BarsDB.scale = nil
+        JarsG13BarsDB.layoutMode = nil
+        JarsG13BarsDB.frameAlpha = nil
+        JarsG13BarsDB.hideOnMouseOut = nil
+        JarsG13BarsDB.hideBars = nil
+
+        print("|cff00ff00Jar's G13 Bars|r: Settings migrated to layout 'Default'.")
     end
 end
 
@@ -154,7 +392,7 @@ local function HideDefaultBars()
     for _, barName in ipairs(configurableBars) do
         local bar = _G[barName]
         if bar then
-            local shouldHide = JarsG13BarsDB.hideBars[barName]
+            local shouldHide = activeProfile.hideBars and activeProfile.hideBars[barName]
             if shouldHide then
                 -- Unregister events that force the bar to show
                 if barName == "MainMenuBar" or barName == "MainActionBar" then
@@ -233,7 +471,7 @@ end
 
 -- Function to update keybind visibility
 local function UpdateKeybinds()
-    local show = JarsG13BarsDB.showKeybinds
+    local show = activeProfile.showKeybinds
     for i = 1, 24 do
         local button = _G["JG13_Button" .. i]
         if button and button.HotKey then
@@ -707,45 +945,42 @@ local function ApplyKeyzenLayout(frame)
 end
 
 -- Create the main frame with all buttons
--- Create the main frame with all buttons
 local function CreateMainFrame()
     local frame = CreateFrame("Frame", "JG13_MainFrame", UIParent)
     frame:SetMovable(false)
     frame:EnableMouse(false)
-    
+
     -- Calculate frame size
     local primaryWidth = (PRIMARY_SIZE * 3) + (PADDING * 2)
     local primaryHeight = (PRIMARY_SIZE * 2) + PADDING
     local sideWidth = (SIDE_SIZE * 2) + PADDING
-    local sideHeight = (SIDE_SIZE * 3) + (PADDING * 2)
     local bottomWidth = (BOTTOM_SIZE * 6) + (PADDING * 5)
     local bottomHeight = BOTTOM_SIZE
-    
+
     local totalWidth = sideWidth + PADDING + primaryWidth + PADDING + sideWidth
     local totalHeight = primaryHeight + PADDING + bottomHeight
-    
+
     frame:SetSize(totalWidth, totalHeight)
-    
-    -- Set scale
-    frame:SetScale(JarsG13BarsDB.scale or 1.0)
-    
-    -- Set position - always centered horizontally, Y from saved variables
-    local pos = JarsG13BarsDB.position
+
+    -- Set scale from active profile
+    frame:SetScale(activeProfile.scale or 1.0)
+
+    -- Set position from active profile
     frame:ClearAllPoints()
-    frame:SetPoint("TOP", UIParent, "TOP", 0, pos.y)
-    
+    frame:SetPoint("TOP", UIParent, "TOP", 0, activeProfile.positionY or -400)
+
     -- Background (for visibility during setup)
     frame.bg = frame:CreateTexture(nil, "BACKGROUND")
     frame.bg:SetAllPoints()
-    frame.bg:SetColorTexture(0, 0, 0, JarsG13BarsDB.bgOpacity or 0.3)
-    
+    frame.bg:SetColorTexture(0, 0, 0, activeProfile.bgOpacity or 0.3)
+
     -- Create all buttons first (without positioning)
     for i = 1, 24 do
         buttons[i] = CreateActionButton(frame, i, PRIMARY_SIZE)
     end
-    
-    -- Apply layout based on mode
-    if JarsG13BarsDB.layoutMode == "Keyzen" then
+
+    -- Apply layout based on active profile
+    if activeProfile.layoutMode == "Keyzen" then
         ApplyKeyzenLayout(frame)
     else
         ApplyG13Layout(frame)
@@ -754,19 +989,18 @@ local function CreateMainFrame()
     -- Setup secure state driver for combat-safe page swapping
     SetupSecurePageDriver()
 
-    -- Apply overall frame alpha
-    frame:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
-
-    -- Hide on mouse out behavior (uses IsMouseOver polling since child buttons consume mouse events)
-    if JarsG13BarsDB.hideOnMouseOut then
+    -- Apply overall frame alpha and hide-on-mouse-out from active profile
+    if activeProfile.hideOnMouseOut then
         frame:SetAlpha(0)
         frame:SetScript("OnUpdate", function(self)
             if self:IsMouseOver() then
-                self:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
+                self:SetAlpha(activeProfile.frameAlpha or 1.0)
             else
                 self:SetAlpha(0)
             end
         end)
+    else
+        frame:SetAlpha(activeProfile.frameAlpha or 1.0)
     end
 
     return frame
@@ -801,45 +1035,51 @@ eventFrame:RegisterEvent("UNIT_ENTERED_VEHICLE")
 eventFrame:RegisterEvent("UNIT_EXITED_VEHICLE")
 eventFrame:RegisterEvent("UPDATE_OVERRIDE_ACTIONBAR")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
         local addonName = ...
         if addonName == "JarsG13Bars" then
             InitDB()
+            LoadSpecLayout()
             HideDefaultBars()
             mainFrame = CreateMainFrame()
-            
+
             CreateConfigWindow()
-            
+
             -- Setup override bindings and update keybinds after a delay to ensure buttons are ready
             C_Timer.After(1, function()
                 UpdateOverrideBindings()
                 UpdateKeybinds()
             end)
-            
+
             print("|cff00ff00Jar's G13 Action Bars|r loaded. Type |cff00ffff/jg13|r to configure.")
             print("|cff00ff00Jar's G13|r: Buttons 1-12 mirror Action Bar 1, buttons 13-24 mirror Action Bar 2.")
-            
+
             self:UnregisterEvent("ADDON_LOADED")
         end
-        
+
     elseif event == "PLAYER_ENTERING_WORLD" then
         HideDefaultBars()
         C_Timer.After(0.5, function()
             UpdateButtons()
         end)
-        
-    elseif event == "ACTIONBAR_SLOT_CHANGED" or event == "UPDATE_BONUS_ACTIONBAR" or 
-           event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE" or 
-           event == "UPDATE_OVERRIDE_ACTIONBAR" or event == "SPELL_UPDATE_ICON" or 
+
+    elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
+        LoadSpecLayout()
+        ApplyActiveProfile()
+        HideDefaultBars()
+        UpdateKeybinds()
+        if RefreshConfigUI then RefreshConfigUI() end
+
+    elseif event == "ACTIONBAR_SLOT_CHANGED" or event == "UPDATE_BONUS_ACTIONBAR" or
+           event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE" or
+           event == "UPDATE_OVERRIDE_ACTIONBAR" or event == "SPELL_UPDATE_ICON" or
            event == "UPDATE_SHAPESHIFT_FORM" or event == "PLAYER_MOUNT_DISPLAY_CHANGED" then
-        -- ActionBarButtonTemplate handles ACTIONBAR_SLOT_CHANGED internally
-        -- Just update keybinds and paged actions
         UpdateButtons()
-        
+
     elseif event == "PLAYER_REGEN_ENABLED" then
-        -- Combat ended: apply any override bindings that were deferred
         if pendingBindingUpdate then
             UpdateOverrideBindings()
             UpdateKeybinds()
@@ -859,7 +1099,8 @@ local function UpdateFramePosition(yOffset)
     if mainFrame then
         mainFrame:ClearAllPoints()
         mainFrame:SetPoint("TOP", UIParent, "TOP", 0, yOffset)
-        JarsG13BarsDB.position.y = yOffset
+        activeProfile.positionY = yOffset
+        PersistActiveProfile()
     end
 end
 
@@ -867,7 +1108,8 @@ end
 local function UpdateBackgroundOpacity(opacity)
     if mainFrame and mainFrame.bg then
         mainFrame.bg:SetColorTexture(0, 0, 0, opacity)
-        JarsG13BarsDB.bgOpacity = opacity
+        activeProfile.bgOpacity = opacity
+        PersistActiveProfile()
     end
 end
 
@@ -875,37 +1117,40 @@ end
 local function UpdateScale(scale)
     if mainFrame then
         mainFrame:SetScale(scale)
-        JarsG13BarsDB.scale = scale
+        activeProfile.scale = scale
+        PersistActiveProfile()
     end
 end
 
 -- Function to update overall frame alpha
 local function UpdateFrameAlpha(alpha)
     if mainFrame then
-        JarsG13BarsDB.frameAlpha = alpha
-        if not JarsG13BarsDB.hideOnMouseOut then
+        activeProfile.frameAlpha = alpha
+        if not activeProfile.hideOnMouseOut then
             mainFrame:SetAlpha(alpha)
         end
+        PersistActiveProfile()
     end
 end
 
 -- Function to apply hide-on-mouse-out behavior
 local function ApplyHideOnMouseOut(enabled)
     if not mainFrame then return end
-    JarsG13BarsDB.hideOnMouseOut = enabled
+    activeProfile.hideOnMouseOut = enabled
     if enabled then
         mainFrame:SetAlpha(0)
         mainFrame:SetScript("OnUpdate", function(self)
             if self:IsMouseOver() then
-                self:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
+                self:SetAlpha(activeProfile.frameAlpha or 1.0)
             else
                 self:SetAlpha(0)
             end
         end)
     else
-        mainFrame:SetAlpha(JarsG13BarsDB.frameAlpha or 1.0)
+        mainFrame:SetAlpha(activeProfile.frameAlpha or 1.0)
         mainFrame:SetScript("OnUpdate", nil)
     end
+    PersistActiveProfile()
 end
 
 -- Create config window
@@ -1104,6 +1349,26 @@ local function CreateSectionHeader(parent, text)
     return container
 end
 
+-- Helper: create a modern text input box
+local function CreateModernEditBox(parent, width, height)
+    local box = CreateFrame("EditBox", nil, parent, "BackdropTemplate")
+    box:SetSize(width, height)
+    box:SetFontObject(ChatFontNormal)
+    box:SetAutoFocus(false)
+    box:SetMaxLetters(50)
+    box:SetTextInsets(8, 8, 0, 0)
+    box:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        edgeSize = 1,
+    })
+    box:SetBackdropColor(UI.sliderBg[1], UI.sliderBg[2], UI.sliderBg[3], UI.sliderBg[4])
+    box:SetBackdropBorderColor(UI.border[1], UI.border[2], UI.border[3], UI.border[4])
+    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    return box
+end
+
 CreateConfigWindow = function()
     if configFrame then
         return
@@ -1111,7 +1376,7 @@ CreateConfigWindow = function()
 
     local PANEL_WIDTH = 380
     local CONTENT_WIDTH = PANEL_WIDTH - 40  -- 20px padding each side
-    local PANEL_HEIGHT = 540
+    local PANEL_HEIGHT = 620
 
     -- Main frame (no Blizzard template)
     configFrame = CreateFrame("Frame", "JG13_ConfigFrame", UIParent, "BackdropTemplate")
@@ -1187,34 +1452,103 @@ CreateConfigWindow = function()
         advanceY((height or 42) + SPACING)
     end
 
+    -- === PROFILES SECTION ===
+    local secProfiles = CreateSectionHeader(content, "Profiles")
+    placeWidget(secProfiles, 20)
+
+    -- Spec + layout label
+    local specLabel = content:CreateFontString(nil, "OVERLAY")
+    specLabel:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    specLabel:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
+    specLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
+    advanceY(16 + SPACING)
+
+    local function UpdateSpecLabel()
+        local specName = GetCurrentSpecName()
+        local layoutText = currentLayoutName and (": " .. currentLayoutName) or ": (none)"
+        specLabel:SetText("Spec: " .. specName .. " | Layout" .. layoutText)
+    end
+    UpdateSpecLabel()
+
+    -- Layout name input + Save button row
+    local profileRow = CreateFrame("Frame", nil, content)
+    profileRow:SetSize(CONTENT_WIDTH, 26)
+    placeWidget(profileRow, 26)
+
+    local nameBox = CreateModernEditBox(profileRow, CONTENT_WIDTH - 80, 26)
+    nameBox:SetPoint("LEFT", 0, 0)
+    if currentLayoutName then
+        nameBox:SetText(currentLayoutName)
+    end
+
+    local saveBtn = CreateModernButton(profileRow, "Save", 72, 26, function()
+        local name = nameBox:GetText():trim()
+        if name ~= "" then
+            SaveLayout(name)
+        end
+    end)
+    saveBtn:SetPoint("RIGHT", 0, 0)
+
+    -- Load dropdown + Delete button row
+    local loadRow = CreateFrame("Frame", nil, content)
+    loadRow:SetSize(CONTENT_WIDTH, 26)
+    placeWidget(loadRow, 26)
+
+    local layoutDropdown = CreateFrame("DropdownButton", nil, loadRow, "WowStyle1DropdownTemplate")
+    layoutDropdown:SetPoint("LEFT", 0, 0)
+    layoutDropdown:SetWidth(CONTENT_WIDTH - 80)
+    layoutDropdown:SetDefaultText(currentLayoutName or "Select a layout...")
+
+    layoutDropdown:SetupMenu(function(_, rootDescription)
+        local names = GetSortedLayoutNames()
+        if #names == 0 then
+            rootDescription:CreateTitle("No saved layouts")
+            return
+        end
+        for _, name in ipairs(names) do
+            rootDescription:CreateButton(name, function()
+                LoadLayout(name)
+            end)
+        end
+    end)
+
+    local deleteBtn = CreateModernButton(loadRow, "Delete", 72, 26, function()
+        local name = nameBox:GetText():trim()
+        if name ~= "" then
+            DeleteLayout(name)
+        end
+    end)
+    deleteBtn:SetPoint("RIGHT", 0, 0)
+
     -- === APPEARANCE SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
     local sec1 = CreateSectionHeader(content, "Appearance")
     placeWidget(sec1, 20)
 
     -- Position slider
     local posSlider = CreateModernSlider(content, "JG13_PositionSlider", "Vertical Position",
-        -2400, 0, JarsG13BarsDB.position.y, 1, CONTENT_WIDTH,
+        -2400, 0, activeProfile.positionY or -400, 1, CONTENT_WIDTH,
         function(v) return tostring(math.floor(v)) end,
         function(v) UpdateFramePosition(math.floor(v)) end)
     placeWidget(posSlider, 42)
 
     -- Background opacity slider
     local opacitySlider = CreateModernSlider(content, "JG13_OpacitySlider", "Background Opacity",
-        0, 1, JarsG13BarsDB.bgOpacity or 0.3, 0.05, CONTENT_WIDTH,
+        0, 1, activeProfile.bgOpacity or 0.3, 0.05, CONTENT_WIDTH,
         function(v) return string.format("%.0f%%", v * 100) end,
         function(v) UpdateBackgroundOpacity(v) end)
     placeWidget(opacitySlider, 42)
 
     -- Scale slider
     local scaleSlider = CreateModernSlider(content, "JG13_ScaleSlider", "Scale",
-        0.5, 1.0, JarsG13BarsDB.scale or 1.0, 0.05, CONTENT_WIDTH,
+        0.5, 1.0, activeProfile.scale or 1.0, 0.05, CONTENT_WIDTH,
         function(v) return string.format("%.0f%%", v * 100) end,
         function(v) UpdateScale(v) end)
     placeWidget(scaleSlider, 42)
 
     -- Overall transparency slider
     local alphaSlider = CreateModernSlider(content, "JG13_AlphaSlider", "Overall Transparency",
-        0, 1, JarsG13BarsDB.frameAlpha or 1.0, 0.05, CONTENT_WIDTH,
+        0, 1, activeProfile.frameAlpha or 1.0, 0.05, CONTENT_WIDTH,
         function(v) return string.format("%.0f%%", v * 100) end,
         function(v) UpdateFrameAlpha(v) end)
     placeWidget(alphaSlider, 42)
@@ -1225,15 +1559,16 @@ CreateConfigWindow = function()
     placeWidget(sec2, 20)
 
     -- Hide on mouse out
-    local hideCheck = CreateModernCheck(content, "Hide unless moused over", JarsG13BarsDB.hideOnMouseOut,
+    local hideCheck = CreateModernCheck(content, "Hide unless moused over", activeProfile.hideOnMouseOut,
         function(checked) ApplyHideOnMouseOut(checked) end)
     placeWidget(hideCheck, 22)
 
     -- Show keybinds
-    local keybindsCheck = CreateModernCheck(content, "Show keybinds on buttons", JarsG13BarsDB.showKeybinds,
+    local keybindsCheck = CreateModernCheck(content, "Show keybinds on buttons", activeProfile.showKeybinds,
         function(checked)
-            JarsG13BarsDB.showKeybinds = checked
+            activeProfile.showKeybinds = checked
             UpdateKeybinds()
+            PersistActiveProfile()
         end)
     placeWidget(keybindsCheck, 22)
 
@@ -1243,11 +1578,11 @@ CreateConfigWindow = function()
     placeWidget(sec3, 20)
 
     -- Layout mode buttons (radio-style toggle)
-    local layoutRow = CreateFrame("Frame", nil, content)
-    layoutRow:SetSize(CONTENT_WIDTH, 30)
-    placeWidget(layoutRow, 30)
+    local layoutRow2 = CreateFrame("Frame", nil, content)
+    layoutRow2:SetSize(CONTENT_WIDTH, 30)
+    placeWidget(layoutRow2, 30)
 
-    local layoutLbl = layoutRow:CreateFontString(nil, "OVERLAY")
+    local layoutLbl = layoutRow2:CreateFontString(nil, "OVERLAY")
     layoutLbl:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
     layoutLbl:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
     layoutLbl:SetPoint("LEFT", 0, 0)
@@ -1280,17 +1615,19 @@ CreateConfigWindow = function()
     end
 
     local g13Btn, keyzenBtn
-    g13Btn = createLayoutToggle(layoutRow, "G13", 50, JarsG13BarsDB.layoutMode == "G13", function()
-        JarsG13BarsDB.layoutMode = "G13"
+    g13Btn = createLayoutToggle(layoutRow2, "G13", 50, activeProfile.layoutMode == "G13", function()
+        activeProfile.layoutMode = "G13"
         g13Btn:SetActive(true)
         keyzenBtn:SetActive(false)
         if mainFrame then ApplyG13Layout(mainFrame) end
+        PersistActiveProfile()
     end)
-    keyzenBtn = createLayoutToggle(layoutRow, "Keyzen", 136, JarsG13BarsDB.layoutMode == "Keyzen", function()
-        JarsG13BarsDB.layoutMode = "Keyzen"
+    keyzenBtn = createLayoutToggle(layoutRow2, "Keyzen", 136, activeProfile.layoutMode == "Keyzen", function()
+        activeProfile.layoutMode = "Keyzen"
         g13Btn:SetActive(false)
         keyzenBtn:SetActive(true)
         if mainFrame then ApplyKeyzenLayout(mainFrame) end
+        PersistActiveProfile()
     end)
 
     -- === BLIZZARD BARS SECTION ===
@@ -1302,16 +1639,19 @@ CreateConfigWindow = function()
         {key = "MainActionBar", label = "Hide Main Bar (Bar 1)"},
     }
 
+    local barChecks = {}
     for _, barInfo in ipairs(barNames) do
-        if JarsG13BarsDB.hideBars[barInfo.key] == nil then
-            JarsG13BarsDB.hideBars[barInfo.key] = true
+        if activeProfile.hideBars[barInfo.key] == nil then
+            activeProfile.hideBars[barInfo.key] = true
         end
-        local barCheck = CreateModernCheck(content, barInfo.label, JarsG13BarsDB.hideBars[barInfo.key],
+        local barCheck = CreateModernCheck(content, barInfo.label, activeProfile.hideBars[barInfo.key],
             function(checked)
-                JarsG13BarsDB.hideBars[barInfo.key] = checked
+                activeProfile.hideBars[barInfo.key] = checked
                 HideDefaultBars()
+                PersistActiveProfile()
             end)
         placeWidget(barCheck, 22)
+        barChecks[barInfo.key] = barCheck
     end
 
     -- === ACTIONS SECTION ===
@@ -1345,19 +1685,12 @@ CreateConfigWindow = function()
 
     -- Reset button
     local resetBtn = CreateModernButton(content, "Reset to Defaults", 160, 30, function()
-        posSlider.slider:SetValue(-400)
-        opacitySlider.slider:SetValue(0.3)
-        scaleSlider.slider:SetValue(1.0)
-        alphaSlider.slider:SetValue(1.0)
-        hideCheck:SetChecked(false)
-        keybindsCheck:SetChecked(true)
-        UpdateFramePosition(-400)
-        UpdateBackgroundOpacity(0.3)
-        UpdateScale(1.0)
-        UpdateFrameAlpha(1.0)
-        ApplyHideOnMouseOut(false)
-        JarsG13BarsDB.showKeybinds = true
+        activeProfile = CreateDefaultProfile()
+        currentLayoutName = nil
+        ApplyActiveProfile()
+        HideDefaultBars()
         UpdateKeybinds()
+        if RefreshConfigUI then RefreshConfigUI() end
         print("|cff00ff00Jar's G13 Bars|r: Settings reset to default.")
     end)
     placeWidget(resetBtn, 30)
@@ -1368,6 +1701,26 @@ CreateConfigWindow = function()
     -- Make frame close with Escape
     tinsert(UISpecialFrames, "JG13_ConfigFrame")
 
+    -- Reload function to refresh all UI widgets from activeProfile
+    RefreshConfigUI = function()
+        posSlider.slider:SetValue(activeProfile.positionY or -400)
+        opacitySlider.slider:SetValue(activeProfile.bgOpacity or 0.3)
+        scaleSlider.slider:SetValue(activeProfile.scale or 1.0)
+        alphaSlider.slider:SetValue(activeProfile.frameAlpha or 1.0)
+        hideCheck:SetChecked(activeProfile.hideOnMouseOut or false)
+        keybindsCheck:SetChecked(activeProfile.showKeybinds ~= false)
+        g13Btn:SetActive(activeProfile.layoutMode == "G13")
+        keyzenBtn:SetActive(activeProfile.layoutMode == "Keyzen")
+        for key, check in pairs(barChecks) do
+            check:SetChecked(activeProfile.hideBars[key] ~= false)
+        end
+        nameBox:SetText(currentLayoutName or "")
+        layoutDropdown:GenerateMenu()
+        layoutDropdown:SetDefaultText(currentLayoutName or "Select a layout...")
+        UpdateSpecLabel()
+        UpdateKeybinds()
+    end
+
     configFrame:Hide()
 end
 
@@ -1376,9 +1729,8 @@ SLASH_JG131 = "/jg13"
 SLASH_JG132 = "/jg13bind"
 SlashCmdList["JG13"] = function(msg)
     msg = msg:lower():trim()
-    
+
     if msg == "bind" or msg == "keybind" or msg == "kb" then
-        -- Toggle keybind mode
         if LibKeyBound then
             LibKeyBound:Toggle()
             if LibKeyBound:IsShown() then
@@ -1389,7 +1741,39 @@ SlashCmdList["JG13"] = function(msg)
         end
         return
     end
-    
+
+    if msg:sub(1, 5) == "save " then
+        local name = msg:sub(6):trim()
+        SaveLayout(name)
+        return
+    end
+
+    if msg:sub(1, 5) == "load " then
+        local name = msg:sub(6):trim()
+        LoadLayout(name)
+        return
+    end
+
+    if msg:sub(1, 7) == "delete " then
+        local name = msg:sub(8):trim()
+        DeleteLayout(name)
+        return
+    end
+
+    if msg == "layouts" or msg == "list" then
+        local names = GetSortedLayoutNames()
+        if #names == 0 then
+            print("|cff00ff00Jar's G13 Bars|r: No saved layouts.")
+        else
+            print("|cff00ff00Jar's G13 Bars|r: Saved layouts:")
+            for _, name in ipairs(names) do
+                local marker = (name == currentLayoutName) and " |cff00ffff(active)|r" or ""
+                print("  - " .. name .. marker)
+            end
+        end
+        return
+    end
+
     -- Toggle config window
     configFrame:SetShown(not configFrame:IsShown())
 end
