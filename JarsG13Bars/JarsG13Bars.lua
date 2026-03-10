@@ -156,6 +156,8 @@ local function GetSortedLayoutNames()
 end
 
 -- Apply the active profile to the live UI
+local ApplyG13Layout     -- forward declaration (defined below)
+local ApplyKeyzenLayout  -- forward declaration (defined below)
 local function ApplyActiveProfile()
     if not mainFrame then return end
 
@@ -762,7 +764,7 @@ local function CreateActionButton(parent, index, size)
 end
 
 -- Layout positioning functions
-local function ApplyG13Layout(frame)
+ApplyG13Layout = function(frame)
     -- Original G13 layout
     local buttonIndex
     local primaryOffsetX = SIDE_SIZE * 2 + PADDING * 2
@@ -833,7 +835,7 @@ local function ApplyG13Layout(frame)
     end
 end
 
-local function ApplyKeyzenLayout(frame)
+ApplyKeyzenLayout = function(frame)
     -- Keyzen keyboard-style layout
     -- Large buttons (01-06) are the fixed center anchor
     local largeOffsetX = SIDE_SIZE * 2 + PADDING * 3
