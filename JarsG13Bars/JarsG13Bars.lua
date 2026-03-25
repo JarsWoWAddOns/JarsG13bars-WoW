@@ -58,10 +58,36 @@ local function SetupSecurePageDriver()
     ]])
 
     -- Macro condition string evaluated by the secure state system.
-    -- [overridebar] fires for dragonriding / special mounts.
+    -- [overridebar] fires for dragonriding / special mounts (never user-configurable).
+    local pm = activeProfile.pageMap or {}
     RegisterStateDriver(stateDriverFrame, "page",
         "[overridebar] override; [vehicleui] vehicle; [possessbar] possess; " ..
-        "[bonusbar:5] 11; [bonusbar:4] 10; [bonusbar:3] 9; [bonusbar:2] 8; [bonusbar:1] 7; " ..
+        "[bonusbar:5] " .. (pm.b5 or 11) .. "; " ..
+        "[bonusbar:4] " .. (pm.b4 or 10) .. "; " ..
+        "[bonusbar:3] " .. (pm.b3 or 9) .. "; " ..
+        "[bonusbar:2] " .. (pm.b2 or 8) .. "; " ..
+        "[bonusbar:1] " .. (pm.b1 or 7) .. "; " ..
+        "[bar:2] 2; [bar:3] 3; [bar:4] 4; [bar:5] 5; [bar:6] 6; 1"
+    )
+end
+
+local pendingDriverUpdate = false
+local function RefreshStateDriver()
+    if InCombatLockdown() then
+        pendingDriverUpdate = true
+        return
+    end
+    pendingDriverUpdate = false
+    if not stateDriverFrame then return end
+    local pm = activeProfile.pageMap or {}
+    UnregisterStateDriver(stateDriverFrame, "page")
+    RegisterStateDriver(stateDriverFrame, "page",
+        "[overridebar] override; [vehicleui] vehicle; [possessbar] possess; " ..
+        "[bonusbar:5] " .. (pm.b5 or 11) .. "; " ..
+        "[bonusbar:4] " .. (pm.b4 or 10) .. "; " ..
+        "[bonusbar:3] " .. (pm.b3 or 9) .. "; " ..
+        "[bonusbar:2] " .. (pm.b2 or 8) .. "; " ..
+        "[bonusbar:1] " .. (pm.b1 or 7) .. "; " ..
         "[bar:2] 2; [bar:3] 3; [bar:4] 4; [bar:5] 5; [bar:6] 6; 1"
     )
 end
@@ -76,6 +102,7 @@ local function CreateDefaultProfile()
         layoutMode = "G13",
         frameAlpha = 1.0,
         hideOnMouseOut = false,
+        pageMap = { b1=7, b2=8, b3=9, b4=10, b5=11 },
         hideBars = {
             MainMenuBar = true,
             MainActionBar = true,
@@ -101,11 +128,19 @@ local function CopyProfile(src)
         frameAlpha = src.frameAlpha or 1.0,
         hideOnMouseOut = src.hideOnMouseOut or false,
         hideBars = {},
+        pageMap = {},
     }
     if src.hideBars then
         for k, v in pairs(src.hideBars) do
             copy.hideBars[k] = v
         end
+    end
+    local defPageMap = { b1=7, b2=8, b3=9, b4=10, b5=11 }
+    if src.pageMap then
+        for k, v in pairs(src.pageMap) do copy.pageMap[k] = v end
+    end
+    for k, v in pairs(defPageMap) do
+        if copy.pageMap[k] == nil then copy.pageMap[k] = v end
     end
     return copy
 end
@@ -1086,6 +1121,9 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             UpdateOverrideBindings()
             UpdateKeybinds()
         end
+        if pendingDriverUpdate then
+            RefreshStateDriver()
+        end
 
     elseif event == "ACTIONBAR_UPDATE_COOLDOWN" or
            event == "ACTIONBAR_UPDATE_USABLE" or event == "SPELL_UPDATE_USABLE" or
@@ -1656,6 +1694,73 @@ CreateConfigWindow = function()
         barChecks[barInfo.key] = barCheck
     end
 
+    -- === BAR PAGING SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
+    local secPaging = CreateSectionHeader(content, "Bar Paging  (Override Bar / Dragonriding unchanged)")
+    placeWidget(secPaging, 20)
+
+    local PAGE_CONDS = {
+        { key = "b1", label = "Cat Form  /  Stealth" },
+        { key = "b2", label = "Bear Form" },
+        { key = "b3", label = "Moonkin  /  Other Form" },
+        { key = "b4", label = "Bonus State 4" },
+        { key = "b5", label = "Bonus State 5" },
+    }
+
+    local pagingSpinners = {}
+
+    local function MakePageSpinner(mapKey, condLabel)
+        local row = CreateFrame("Frame", nil, content)
+        row:SetSize(CONTENT_WIDTH, 24)
+
+        local lbl = row:CreateFontString(nil, "OVERLAY")
+        lbl:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+        lbl:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
+        lbl:SetPoint("LEFT", 0, 0)
+        lbl:SetText(condLabel)
+
+        local valLbl = row:CreateFontString(nil, "OVERLAY")
+        valLbl:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+        valLbl:SetTextColor(UI.accent[1], UI.accent[2], UI.accent[3])
+        valLbl:SetPoint("RIGHT", -46, 0)
+        valLbl:SetText("Page " .. (activeProfile.pageMap[mapKey] or 1))
+
+        local btnUp = CreateModernButton(row, ">", 20, 22, nil)
+        btnUp:SetPoint("RIGHT", 0, 0)
+        local btnDn = CreateModernButton(row, "<", 20, 22, nil)
+        btnDn:SetPoint("RIGHT", btnUp, "LEFT", -2, 0)
+
+        btnUp:SetScript("OnClick", function()
+            local p = (activeProfile.pageMap[mapKey] or 1) + 1
+            if p > 12 then p = 1 end
+            activeProfile.pageMap[mapKey] = p
+            valLbl:SetText("Page " .. p)
+            PersistActiveProfile()
+            RefreshStateDriver()
+        end)
+        btnDn:SetScript("OnClick", function()
+            local p = (activeProfile.pageMap[mapKey] or 1) - 1
+            if p < 1 then p = 12 end
+            activeProfile.pageMap[mapKey] = p
+            valLbl:SetText("Page " .. p)
+            PersistActiveProfile()
+            RefreshStateDriver()
+        end)
+
+        row.mapKey = mapKey
+        row.valLbl = valLbl
+        row.Refresh = function(self)
+            self.valLbl:SetText("Page " .. (activeProfile.pageMap[self.mapKey] or 1))
+        end
+        return row
+    end
+
+    for _, cond in ipairs(PAGE_CONDS) do
+        local sp = MakePageSpinner(cond.key, cond.label)
+        placeWidget(sp, 24)
+        table.insert(pagingSpinners, sp)
+    end
+
     -- === ACTIONS SECTION ===
     advanceY(SECTION_SPACING - SPACING)
     local sec5 = CreateSectionHeader(content, "Actions")
@@ -1719,6 +1824,7 @@ CreateConfigWindow = function()
         nameBox:SetText(currentLayoutName or "")
         layoutDropdown:GenerateMenu()
         layoutDropdown:SetDefaultText(currentLayoutName or "Select a layout...")
+        for _, sp in ipairs(pagingSpinners) do sp:Refresh() end
         UpdateSpecLabel()
         UpdateKeybinds()
     end
