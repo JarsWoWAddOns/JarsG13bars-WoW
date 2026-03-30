@@ -4,6 +4,7 @@
 ## Author: Jar
 ## Version: 1.1
 ## SavedVariables: JarsG13BarsDB
+## SavedVariablesPerCharacter: JarsG13BarsCharDB
 
 Libs\LibKeyBound-1.0\lib.xml
 
