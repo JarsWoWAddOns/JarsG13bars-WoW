@@ -1,4 +1,4 @@
--- Jar's G13 Action Bars for WoW 12.0.1
+-- Jar's G13 Action Bars for WoW 12.1.5
 -- Custom action bar layout for Logitech G13 gaming keypad
 
 -- Saved variables
@@ -20,17 +20,53 @@ local MAX_LAYOUTS = 100
 local currentLayoutName = nil
 local activeProfile = {}
 
+-- Focus bar profile system (independent of main G13 profiles)
+local MAX_FOCUS_LAYOUTS = 100
+local NUM_FOCUS_BARS = 2
+local currentFocusLayoutName = { nil, nil }
+local activeFocusProfile = { {}, {} }
+
 -- Frame references
 local mainFrame
 local buttons = {}
 local UIHider -- Hidden frame for hiding Blizzard bars
-local focusRowFrame
-local focusRowButtons = {}
-local pendingFocusRowUpdate = false
+local focusRowFrame = {}
+local focusRowButtons = { {}, {} }
+
+-- queue secure stuff til combat ends
+local pendingSafe = {}
+local function RunWhenSafe(key, fn)
+    if InCombatLockdown() then
+        pendingSafe[key] = fn
+    else
+        pendingSafe[key] = nil
+        fn()
+    end
+end
+
+local function FlushSafeQueue()
+    for key, fn in pairs(pendingSafe) do
+        pendingSafe[key] = nil
+        fn()
+    end
+end
 
 -- Secure state driver for combat-safe action bar page swapping.
 -- Uses WoW's restricted environment so page changes work even in combat.
 local stateDriverFrame
+
+-- possess/override/vehicle resolved in the snippet, same as Bartender4
+local function GetPageDriverString()
+    local pm = activeProfile.pageMap or {}
+    local b5 = pm.b5 or 11
+    return "[overridebar][vehicleui][possessbar][shapeshift] possess; " ..
+        "[bonusbar:5] " .. (b5 == 11 and "dragon" or b5) .. "; " ..
+        "[bonusbar:4] " .. (pm.b4 or 10) .. "; " ..
+        "[bonusbar:3] " .. (pm.b3 or 9) .. "; " ..
+        "[bonusbar:2] " .. (pm.b2 or 8) .. "; " ..
+        "[bonusbar:1] " .. (pm.b1 or 7) .. "; " ..
+        "[bar:2] 2; [bar:3] 3; [bar:4] 4; [bar:5] 5; [bar:6] 6; 1"
+end
 
 local function SetupSecurePageDriver()
     stateDriverFrame = CreateFrame("Frame", "JG13_StateDriver", UIParent, "SecureHandlerStateTemplate")
@@ -42,16 +78,21 @@ local function SetupSecurePageDriver()
 
     -- Restricted Lua snippet executed on every state change (works in combat)
     stateDriverFrame:SetAttribute("_onstate-page", [[
-        local page
-        if newstate == "override" then
-            page = GetOverrideBarIndex()
-        elseif newstate == "vehicle" then
-            page = GetVehicleBarIndex()
-        elseif newstate == "possess" then
-            page = 12
-        else
-            page = tonumber(newstate) or 1
+        local page = newstate
+        if newstate == "possess" or newstate == "dragon" then
+            if HasVehicleActionBar() then
+                page = GetVehicleBarIndex()
+            elseif HasOverrideActionBar() then
+                page = GetOverrideBarIndex()
+            elseif HasTempShapeshiftActionBar() then
+                page = GetTempShapeshiftBarIndex()
+            elseif HasBonusActionBar() then
+                page = GetBonusBarIndex()
+            else
+                page = 12
+            end
         end
+        page = tonumber(page) or 1
 
         for i = 1, 12 do
             local button = self:GetFrameRef("button" .. i)
@@ -61,39 +102,15 @@ local function SetupSecurePageDriver()
         end
     ]])
 
-    -- Macro condition string evaluated by the secure state system.
-    -- [overridebar] fires for dragonriding / special mounts (never user-configurable).
-    local pm = activeProfile.pageMap or {}
-    RegisterStateDriver(stateDriverFrame, "page",
-        "[overridebar] override; [vehicleui] vehicle; [possessbar] possess; " ..
-        "[bonusbar:5] " .. (pm.b5 or 11) .. "; " ..
-        "[bonusbar:4] " .. (pm.b4 or 10) .. "; " ..
-        "[bonusbar:3] " .. (pm.b3 or 9) .. "; " ..
-        "[bonusbar:2] " .. (pm.b2 or 8) .. "; " ..
-        "[bonusbar:1] " .. (pm.b1 or 7) .. "; " ..
-        "[bar:2] 2; [bar:3] 3; [bar:4] 4; [bar:5] 5; [bar:6] 6; 1"
-    )
+    RegisterStateDriver(stateDriverFrame, "page", GetPageDriverString())
 end
 
-local pendingDriverUpdate = false
 local function RefreshStateDriver()
-    if InCombatLockdown() then
-        pendingDriverUpdate = true
-        return
-    end
-    pendingDriverUpdate = false
-    if not stateDriverFrame then return end
-    local pm = activeProfile.pageMap or {}
-    UnregisterStateDriver(stateDriverFrame, "page")
-    RegisterStateDriver(stateDriverFrame, "page",
-        "[overridebar] override; [vehicleui] vehicle; [possessbar] possess; " ..
-        "[bonusbar:5] " .. (pm.b5 or 11) .. "; " ..
-        "[bonusbar:4] " .. (pm.b4 or 10) .. "; " ..
-        "[bonusbar:3] " .. (pm.b3 or 9) .. "; " ..
-        "[bonusbar:2] " .. (pm.b2 or 8) .. "; " ..
-        "[bonusbar:1] " .. (pm.b1 or 7) .. "; " ..
-        "[bar:2] 2; [bar:3] 3; [bar:4] 4; [bar:5] 5; [bar:6] 6; 1"
-    )
+    RunWhenSafe("driver", function()
+        if not stateDriverFrame then return end
+        UnregisterStateDriver(stateDriverFrame, "page")
+        RegisterStateDriver(stateDriverFrame, "page", GetPageDriverString())
+    end)
 end
 
 -- Create a default profile with all look/feel settings
@@ -151,29 +168,26 @@ end
 
 -- Get current spec ID (returns 0 if not available)
 local function GetCurrentSpecID()
-    if GetSpecialization then
-        local spec = GetSpecialization()
-        if spec then
-            return GetSpecializationInfo(spec) or 0
-        end
+    local spec = C_SpecializationInfo.GetSpecialization()
+    if spec then
+        return C_SpecializationInfo.GetSpecializationInfo(spec) or 0
     end
     return 0
 end
 
 -- Get current spec name
 local function GetCurrentSpecName()
-    if GetSpecialization then
-        local spec = GetSpecialization()
-        if spec then
-            local _, name = GetSpecializationInfo(spec)
-            return name or "Unknown"
-        end
+    local spec = C_SpecializationInfo.GetSpecialization()
+    if spec then
+        local _, name = C_SpecializationInfo.GetSpecializationInfo(spec)
+        return name or "Unknown"
     end
     return "Unknown"
 end
 
 -- Forward declarations for profile UI refresh
 local RefreshConfigUI
+local RefreshFocusConfigUI = {}
 
 -- Count saved layouts
 local function CountLayouts()
@@ -197,15 +211,43 @@ end
 -- Apply the active profile to the live UI
 local ApplyG13Layout     -- forward declaration (defined below)
 local ApplyKeyzenLayout  -- forward declaration (defined below)
+local HideDefaultBars    -- forward declaration (defined below)
+
+local function ApplyLayoutMode()
+    RunWhenSafe("layout", function()
+        if not mainFrame then return end
+        if activeProfile.layoutMode == "Keyzen" then
+            ApplyKeyzenLayout(mainFrame)
+        else
+            ApplyG13Layout(mainFrame)
+        end
+    end)
+end
+
+-- fade check, throttled so its not every frame
+local function MouseOutOnUpdate(self, elapsed)
+    self.fadeElapsed = (self.fadeElapsed or 0) + elapsed
+    if self.fadeElapsed < 0.1 then return end
+    self.fadeElapsed = 0
+    if self:IsMouseOver() then
+        self:SetAlpha(activeProfile.frameAlpha or 1.0)
+    else
+        self:SetAlpha(0)
+    end
+end
+
+local function SetMouseOutFade(frame)
+    if activeProfile.hideOnMouseOut then
+        frame:SetAlpha(0)
+        frame:SetScript("OnUpdate", MouseOutOnUpdate)
+    else
+        frame:SetAlpha(activeProfile.frameAlpha or 1.0)
+        frame:SetScript("OnUpdate", nil)
+    end
+end
+
 local function ApplyActiveProfile()
     if not mainFrame then return end
-
-    -- Position
-    mainFrame:ClearAllPoints()
-    mainFrame:SetPoint("TOP", UIParent, "TOP", 0, activeProfile.positionY or -400)
-
-    -- Scale
-    mainFrame:SetScale(activeProfile.scale or 1.0)
 
     -- Background opacity
     if mainFrame.bg then
@@ -213,32 +255,25 @@ local function ApplyActiveProfile()
     end
 
     -- Frame alpha + hide on mouse out
-    if activeProfile.hideOnMouseOut then
-        mainFrame:SetAlpha(0)
-        mainFrame:SetScript("OnUpdate", function(self)
-            if self:IsMouseOver() then
-                self:SetAlpha(activeProfile.frameAlpha or 1.0)
-            else
-                self:SetAlpha(0)
-            end
-        end)
-    else
-        mainFrame:SetAlpha(activeProfile.frameAlpha or 1.0)
-        mainFrame:SetScript("OnUpdate", nil)
-    end
+    SetMouseOutFade(mainFrame)
 
-    -- Layout mode
-    if activeProfile.layoutMode == "Keyzen" then
-        ApplyKeyzenLayout(mainFrame)
-    else
-        ApplyG13Layout(mainFrame)
-    end
+    RunWhenSafe("profile", function()
+        mainFrame:ClearAllPoints()
+        mainFrame:SetPoint("TOP", UIParent, "TOP", 0, activeProfile.positionY or -400)
+        mainFrame:SetScale(activeProfile.scale or 1.0)
+    end)
+
+    ApplyLayoutMode()
+    RefreshStateDriver()
 end
 
 -- Persist the current in-memory profile back to SavedVariables
 local function PersistActiveProfile()
     if currentLayoutName and JarsG13BarsDB.layouts[currentLayoutName] then
         JarsG13BarsDB.layouts[currentLayoutName] = CopyProfile(activeProfile)
+    else
+        -- no named layout, keep it as the unnamed current one
+        JarsG13BarsDB.currentProfile = CopyProfile(activeProfile)
     end
 end
 
@@ -315,8 +350,12 @@ local function LoadSpecLayout()
         return
     end
 
-    -- No layout found - use defaults
-    activeProfile = CreateDefaultProfile()
+    -- No layout found - use the unnamed one or defaults
+    if JarsG13BarsDB.currentProfile then
+        activeProfile = CopyProfile(JarsG13BarsDB.currentProfile)
+    else
+        activeProfile = CreateDefaultProfile()
+    end
     currentLayoutName = nil
 end
 
@@ -347,6 +386,196 @@ local function DeleteLayout(name)
     return true
 end
 
+-- ============================================================
+-- FOCUS BAR PROFILE SYSTEM (independent of main G13 profiles)
+-- ============================================================
+
+local function CreateDefaultFocusProfile()
+    return {
+        enabled = false,
+        slots = {},
+        buttonSize = 40,
+        padding = 4,
+        posX = 0,
+        posY = -200,
+        bgOpacity = 0.3,
+        locked = true,
+        nonInteractive = false,
+        combatOnly = false,
+        orientation = "horizontal",
+    }
+end
+
+local function CopyFocusProfile(src)
+    local copy = {
+        enabled = src.enabled or false,
+        buttonSize = src.buttonSize or 40,
+        padding = src.padding or 4,
+        posX = src.posX or 0,
+        posY = src.posY or -200,
+        bgOpacity = src.bgOpacity or 0.3,
+        locked = src.locked ~= false,
+        nonInteractive = src.nonInteractive or false,
+        combatOnly = src.combatOnly or false,
+        orientation = src.orientation or "horizontal",
+        slots = {},
+    }
+    if src.slots then
+        for _, s in ipairs(src.slots) do
+            table.insert(copy.slots, s)
+        end
+    end
+    return copy
+end
+
+local function GetFocusDBTables(barIndex)
+    if barIndex == 2 then
+        return JarsG13BarsCharDB.focus2Layouts,
+               JarsG13BarsCharDB.focus2SpecAssociations,
+               "focus2LastActiveLayout",
+               "focus2CurrentProfile"
+    end
+    return JarsG13BarsCharDB.focusLayouts,
+           JarsG13BarsCharDB.focusSpecAssociations,
+           "focusLastActiveLayout",
+           "focusCurrentProfile"
+end
+
+local function CountFocusLayouts(barIndex)
+    local layouts = GetFocusDBTables(barIndex)
+    local count = 0
+    for _ in pairs(layouts) do
+        count = count + 1
+    end
+    return count
+end
+
+local function GetSortedFocusLayoutNames(barIndex)
+    local layouts = GetFocusDBTables(barIndex)
+    local names = {}
+    for name in pairs(layouts) do
+        tinsert(names, name)
+    end
+    table.sort(names)
+    return names
+end
+
+local function PersistActiveFocusProfile(barIndex)
+    local layouts, _, _, currentKey = GetFocusDBTables(barIndex)
+    local name = currentFocusLayoutName[barIndex]
+    if name and layouts[name] then
+        layouts[name] = CopyFocusProfile(activeFocusProfile[barIndex])
+    else
+        JarsG13BarsCharDB[currentKey] = CopyFocusProfile(activeFocusProfile[barIndex])
+    end
+end
+
+-- Forward declare BuildFocusRow (defined later)
+local BuildFocusRow
+
+local function SaveFocusLayout(barIndex, name)
+    if not name or name == "" then
+        print("|cff00ff00Jar's G13 Bars|r: Please enter a focus layout name.")
+        return false
+    end
+    local layouts, specAssoc, lastActiveKey = GetFocusDBTables(barIndex)
+    if CountFocusLayouts(barIndex) >= MAX_FOCUS_LAYOUTS and not layouts[name] then
+        print("|cff00ff00Jar's G13 Bars|r: Maximum " .. MAX_FOCUS_LAYOUTS .. " focus layouts reached.")
+        return false
+    end
+
+    layouts[name] = CopyFocusProfile(activeFocusProfile[barIndex])
+    currentFocusLayoutName[barIndex] = name
+    JarsG13BarsCharDB[lastActiveKey] = name
+
+    local specID = GetCurrentSpecID()
+    if specID and specID > 0 then
+        specAssoc[specID] = name
+    end
+
+    print("|cff00ff00Jar's G13 Bars|r: Focus " .. barIndex .. " layout '" .. name .. "' saved" ..
+        (specID and specID > 0 and (" for " .. GetCurrentSpecName()) or "") .. ".")
+    if RefreshFocusConfigUI[barIndex] then RefreshFocusConfigUI[barIndex]() end
+    return true
+end
+
+local function LoadFocusLayout(barIndex, name)
+    local layouts, specAssoc, lastActiveKey = GetFocusDBTables(barIndex)
+    if not name or not layouts[name] then
+        print("|cff00ff00Jar's G13 Bars|r: Focus " .. barIndex .. " layout '" .. (name or "nil") .. "' not found.")
+        return false
+    end
+
+    activeFocusProfile[barIndex] = CopyFocusProfile(layouts[name])
+    currentFocusLayoutName[barIndex] = name
+    JarsG13BarsCharDB[lastActiveKey] = name
+
+    local specID = GetCurrentSpecID()
+    if specID and specID > 0 then
+        specAssoc[specID] = name
+    end
+
+    print("|cff00ff00Jar's G13 Bars|r: Focus " .. barIndex .. " layout '" .. name .. "' loaded" ..
+        (specID and specID > 0 and (" for " .. GetCurrentSpecName()) or "") .. ".")
+    if BuildFocusRow then BuildFocusRow(barIndex) end
+    if RefreshFocusConfigUI[barIndex] then RefreshFocusConfigUI[barIndex](true) end
+    return true
+end
+
+local function LoadFocusSpecLayout(barIndex)
+    local layouts, specAssoc, lastActiveKey, currentKey = GetFocusDBTables(barIndex)
+    local specID = GetCurrentSpecID()
+    if specID and specID > 0 then
+        local layoutName = specAssoc[specID]
+        if layoutName and layouts[layoutName] then
+            activeFocusProfile[barIndex] = CopyFocusProfile(layouts[layoutName])
+            currentFocusLayoutName[barIndex] = layoutName
+            print("|cff00ff00Jar's G13 Bars|r: Loaded focus " .. barIndex .. " layout '" .. layoutName .. "' for " .. GetCurrentSpecName() .. ".")
+            return
+        end
+    end
+
+    local lastLayout = JarsG13BarsCharDB[lastActiveKey]
+    if lastLayout and layouts[lastLayout] then
+        activeFocusProfile[barIndex] = CopyFocusProfile(layouts[lastLayout])
+        currentFocusLayoutName[barIndex] = lastLayout
+        return
+    end
+
+    if JarsG13BarsCharDB[currentKey] then
+        activeFocusProfile[barIndex] = CopyFocusProfile(JarsG13BarsCharDB[currentKey])
+    else
+        activeFocusProfile[barIndex] = CreateDefaultFocusProfile()
+    end
+    currentFocusLayoutName[barIndex] = nil
+end
+
+local function DeleteFocusLayout(barIndex, name)
+    local layouts, specAssoc, lastActiveKey = GetFocusDBTables(barIndex)
+    if not name or not layouts[name] then
+        return false
+    end
+
+    layouts[name] = nil
+
+    for specID, layoutName in pairs(specAssoc) do
+        if layoutName == name then
+            specAssoc[specID] = nil
+        end
+    end
+
+    if currentFocusLayoutName[barIndex] == name then
+        currentFocusLayoutName[barIndex] = nil
+    end
+    if JarsG13BarsCharDB[lastActiveKey] == name then
+        JarsG13BarsCharDB[lastActiveKey] = nil
+    end
+
+    print("|cff00ff00Jar's G13 Bars|r: Focus " .. barIndex .. " layout '" .. name .. "' deleted.")
+    if RefreshFocusConfigUI[barIndex] then RefreshFocusConfigUI[barIndex]() end
+    return true
+end
+
 -- Initialize saved variables (migrate from flat to profile-based structure)
 local function InitDB()
     if not JarsG13BarsDB then
@@ -364,9 +593,56 @@ local function InitDB()
         JarsG13BarsDB.lastActiveLayout = nil
     end
 
-    -- Initialize per-character focus row data
+    -- Initialize focus bar profile tables
+    if not JarsG13BarsCharDB.focusLayouts then
+        JarsG13BarsCharDB.focusLayouts = {}
+    end
+    if not JarsG13BarsCharDB.focusSpecAssociations then
+        JarsG13BarsCharDB.focusSpecAssociations = {}
+    end
+    -- Focus bar 2
+    if not JarsG13BarsCharDB.focus2Layouts then
+        JarsG13BarsCharDB.focus2Layouts = {}
+    end
+    if not JarsG13BarsCharDB.focus2SpecAssociations then
+        JarsG13BarsCharDB.focus2SpecAssociations = {}
+    end
+
+    -- Initialize per-character focus row data (legacy, kept for migration)
     if not JarsG13BarsCharDB.focusRows then
         JarsG13BarsCharDB.focusRows = {}
+    end
+
+    -- Migrate old per-char focus row configs to the new focus profile system
+    if JarsG13BarsCharDB.focusRows then
+        local migrated = false
+        for specID, cfg in pairs(JarsG13BarsCharDB.focusRows) do
+            if type(cfg) == "table" and not JarsG13BarsCharDB.focusLayouts["Default"] then
+                JarsG13BarsCharDB.focusLayouts["Default"] = {
+                    enabled = cfg.enabled or false,
+                    slots = {},
+                    buttonSize = cfg.buttonSize or 40,
+                    padding = cfg.padding or 4,
+                    posX = cfg.posX or 0,
+                    posY = cfg.posY or -200,
+                    bgOpacity = cfg.bgOpacity or 0.3,
+                    locked = cfg.locked ~= false,
+                    nonInteractive = cfg.nonInteractive or false,
+                    combatOnly = cfg.combatOnly or false,
+                }
+                if cfg.slots then
+                    for _, s in ipairs(cfg.slots) do
+                        table.insert(JarsG13BarsCharDB.focusLayouts["Default"].slots, s)
+                    end
+                end
+                JarsG13BarsCharDB.focusSpecAssociations[specID] = "Default"
+                migrated = true
+            end
+        end
+        if migrated then
+            JarsG13BarsCharDB.focusRows = {}
+            print("|cff00ff00Jar's G13 Bars|r: Focus bar settings migrated to profile 'Default'.")
+        end
     end
 
     -- Migrate from old flat structure to profile-based
@@ -406,189 +682,156 @@ local function InitDB()
     end
 end
 
--- Hide default action bars
-local function HideDefaultBars()
-    -- Create hidden parent frame if it doesn't exist
-    if not UIHider then
-        UIHider = CreateFrame("Frame")
-        UIHider:Hide()
-    end
-    
-    -- Hide MultiBarBottomLeft (actions 73-84) since JG13 buttons 13-24 mirror it
-    local multiBar = _G["MultiBarBottomLeft"]
-    if multiBar then
-        multiBar:SetParent(UIHider)
-        multiBar:Hide()
-        -- Hide individual buttons
-        for i = 1, 12 do
-            local button = _G["MultiBarBottomLeftButton" .. i]
-            if button then
-                button:Hide()
-                button:SetParent(UIHider)
-            end
+-- Hide default action bars, Bartender4 HideBlizzard style. only once
+local hiddenParts = {}
+
+-- clear a key w/o leaving taint on it
+local function PurgeKey(t, k)
+    t[k] = nil
+    local c = 42
+    repeat
+        if t[c] == nil then
+            t[c] = nil
         end
+        c = c + 1
+    until issecurevariable(t, k)
+end
+
+local function HideActionBarFrame(frame, clearEvents)
+    if not frame then return end
+    if clearEvents then
+        frame:UnregisterAllEvents()
     end
-    
-    -- Manage main action bar
-    local configurableBars = {
-        "MainMenuBar",        -- <= 11.2.5
-        "MainActionBar",      -- >= 12.0
-    }
-    
-    for _, barName in ipairs(configurableBars) do
-        local bar = _G[barName]
-        if bar then
-            local shouldHide = activeProfile.hideBars and activeProfile.hideBars[barName]
-            if shouldHide then
-                -- Unregister events that force the bar to show
-                if barName == "MainMenuBar" or barName == "MainActionBar" then
-                    if bar.UnregisterEvent then
-                        pcall(function()
-                            bar:UnregisterEvent("PLAYER_REGEN_ENABLED")
-                            bar:UnregisterEvent("PLAYER_REGEN_DISABLED")
-                            bar:UnregisterEvent("ACTIONBAR_SHOWGRID")
-                            bar:UnregisterEvent("ACTIONBAR_HIDEGRID")
-                        end)
-                    end
-                end
-                
-                -- Purge EditMode state
-                if bar.system then
-                    bar.isShownExternal = nil
-                end
-                
-                -- Use HideBase if available (EditMode override)
-                if bar.HideBase then
-                    bar:HideBase()
-                else
-                    bar:Hide()
-                end
-                
-                -- Set parent to hidden frame to keep it hidden
-                bar:SetParent(UIHider)
-                
-                -- Hide individual buttons for this bar
-                if barName == "MainMenuBar" or barName == "MainActionBar" then
-                    for i = 1, 12 do
-                        local button = _G["ActionButton" .. i]
-                        if button then
-                            button:Hide()
-                            button:SetAttribute("statehidden", true)
-                        end
-                    end
-                end
-            else
-                -- Show the bar - restore parent and re-register events
-                if barName == "MainMenuBar" or barName == "MainActionBar" then
-                    if bar.RegisterEvent then
-                        pcall(function()
-                            bar:RegisterEvent("PLAYER_REGEN_ENABLED")
-                            bar:RegisterEvent("PLAYER_REGEN_DISABLED")
-                            bar:RegisterEvent("ACTIONBAR_SHOWGRID")
-                            bar:RegisterEvent("ACTIONBAR_HIDEGRID")
-                        end)
-                    end
-                end
-                
-                -- Restore parent
-                bar:SetParent(UIParent)
-                
-                -- Use ShowBase if available (EditMode override)
-                if bar.ShowBase then
-                    bar:ShowBase()
-                else
-                    bar:Show()
-                end
-                
-                -- Show individual buttons
-                if barName == "MainMenuBar" or barName == "MainActionBar" then
-                    for i = 1, 12 do
-                        local button = _G["ActionButton" .. i]
-                        if button then
-                            button:SetAttribute("statehidden", false)
-                            button:Show()
-                        end
-                    end
-                end
-            end
+    -- EditMode bits
+    if frame.system then
+        PurgeKey(frame, "isShownExternal")
+    end
+    if frame.HideBase then
+        frame:HideBase()
+    else
+        frame:Hide()
+    end
+    frame:SetParent(UIHider)
+end
+
+local function HideActionButton(button)
+    if not button then return end
+    button:Hide()
+    button:UnregisterAllEvents()
+    button:SetAttribute("statehidden", true)
+    button.bar = nil
+end
+
+HideDefaultBars = function()
+    RunWhenSafe("hidebars", function()
+        if not UIHider then
+            UIHider = CreateFrame("Frame")
+            UIHider:Hide()
         end
+
+        -- Bar 2 (slots 61-72) always goes, JG13 buttons 13-24 replace it
+        if not hiddenParts.bar2 then
+            HideActionBarFrame(MultiBarBottomLeft, true)
+            for i = 1, 12 do
+                HideActionButton(_G["MultiBarBottomLeftButton" .. i])
+            end
+            hiddenParts.bar2 = true
+        end
+
+        if activeProfile.hideBars and activeProfile.hideBars.MainActionBar then
+            if not hiddenParts.main then
+                HideActionBarFrame(MainMenuBar, false)   -- <= 11.2.5
+                HideActionBarFrame(MainActionBar, false) -- >= 12.0
+                for i = 1, 12 do
+                    HideActionButton(_G["ActionButton" .. i])
+                end
+                if MainMenuBar then
+                    MainMenuBar:UnregisterEvent("PLAYER_REGEN_ENABLED")
+                    MainMenuBar:UnregisterEvent("PLAYER_REGEN_DISABLED")
+                    MainMenuBar:UnregisterEvent("ACTIONBAR_SHOWGRID")
+                    MainMenuBar:UnregisterEvent("ACTIONBAR_HIDEGRID")
+                end
+                hiddenParts.main = true
+            end
+        elseif hiddenParts.main and not hiddenParts.warned then
+            -- cant un-hide cleanly, needs a reload
+            print("|cff00ff00Jar's G13 Bars|r: Blizzard main bar comes back after a /reload.")
+            hiddenParts.warned = true
+        end
+    end)
+end
+
+-- one binding command per button: ACTIONBUTTONn for 1-12, MULTIACTIONBAR1BUTTONn for 13-24
+local function GetButtonBindCommand(index)
+    if index <= 12 then
+        return "ACTIONBUTTON" .. index
+    end
+    return "MULTIACTIONBAR1BUTTON" .. (index - 12)
+end
+
+local function UpdateButtonHotkey(button)
+    if not button.HotKey or not button.bindCommand then return end
+    local key = activeProfile.showKeybinds and GetBindingKey(button.bindCommand)
+    local text = key and GetBindingText(key, 1) or ""
+    if text ~= "" and text:byte() > 31 then
+        button.HotKey:SetText(text)
+        button.HotKey:Show()
+    else
+        button.HotKey:SetText("")
+        button.HotKey:Hide()
     end
 end
 
 -- Function to update keybind visibility
 local function UpdateKeybinds()
-    local show = activeProfile.showKeybinds
     for i = 1, 24 do
-        local button = _G["JG13_Button" .. i]
-        if button and button.HotKey then
-            if show then
-                -- Buttons 1-12 use standard action bindings, 13-24 use click bindings
-                local command
-                if i <= 12 then
-                    command = "ACTIONBUTTON" .. i
-                else
-                    -- Use click binding for buttons 13-24 (exclusive to this addon)
-                    command = "CLICK JG13_Button" .. i .. ":Keybind"
-                end
-                
-                if command then
-                    local key = GetBindingKey(command)
-                    if key and key ~= "" then
-                        local bindingText = GetBindingText(key, "KEY_", 1)
-                        if bindingText and bindingText ~= "" and bindingText:byte() > 31 then
-                            button.HotKey:SetText(bindingText)
-                        else
-                            button.HotKey:SetText("")
-                        end
-                    else
-                        button.HotKey:SetText("")
-                    end
-                end
-                button.HotKey:Show()
-            else
-                -- When hiding, clear text and hide
-                button.HotKey:SetText("")
-                button.HotKey:Hide()
-            end
-        end
+        if buttons[i] then UpdateButtonHotkey(buttons[i]) end
     end
 end
 
--- Flag: override bindings need to be (re)applied once combat ends
-local pendingBindingUpdate = false
-
--- Function to setup override bindings
-local function UpdateOverrideBindings()
-    if not mainFrame then return end
-    if InCombatLockdown() then
-        pendingBindingUpdate = true
-        return
-    end
-    pendingBindingUpdate = false
-    
-    ClearOverrideBindings(mainFrame)
-    
-    for i = 1, 24 do
-        local button = _G["JG13_Button" .. i]
-        if button then
-            local command
-            if i <= 12 then
-                command = "ACTIONBUTTON" .. i
-            elseif i <= 24 then
-                command = "MULTIACTIONBAR1BUTTON" .. (i - 12)
-            end
-            
-            if command then
-                for k = 1, select("#", GetBindingKey(command)) do
-                    local key = select(k, GetBindingKey(command))
-                    if key and key ~= "" then
-                        -- Use "Keybind" as the mouse button for keybind clicks
-                        SetOverrideBindingClick(mainFrame, false, key, button:GetName(), "Keybind")
-                    end
-                end
+-- old versions bound 13-24 as CLICK bindings, move those over
+local function MigrateClickBindings()
+    local changed = false
+    for i = 13, 24 do
+        for _, mouse in ipairs({ "LeftButton", "Keybind" }) do
+            local click = "CLICK JG13_Button" .. i .. ":" .. mouse
+            local key = GetBindingKey(click)
+            while key do
+                SetBinding(key, GetButtonBindCommand(i))
+                changed = true
+                key = GetBindingKey(click)
             end
         end
     end
+    if changed then
+        SaveBindings(GetCurrentBindingSet())
+    end
+end
+
+-- Function to setup override bindings
+local inReassignBindings = false
+local function UpdateOverrideBindings()
+    if not mainFrame then return end
+    RunWhenSafe("bindings", function()
+        if inReassignBindings then return end
+        inReassignBindings = true
+
+        MigrateClickBindings()
+        ClearOverrideBindings(mainFrame)
+        for i = 1, 24 do
+            local button = buttons[i]
+            local command = GetButtonBindCommand(i)
+            for k = 1, select("#", GetBindingKey(command)) do
+                local key = select(k, GetBindingKey(command))
+                if key and key ~= "" then
+                    -- Use "Keybind" as the mouse button for keybind clicks
+                    SetOverrideBindingClick(mainFrame, false, key, button:GetName(), "Keybind")
+                end
+            end
+        end
+
+        inReassignBindings = false
+    end)
 end
 
 -- Create a single action button
@@ -596,21 +839,27 @@ local function CreateActionButton(parent, index, size)
     local button = CreateFrame("CheckButton", "JG13_Button" .. index, parent, "ActionBarButtonTemplate")
     button:SetSize(size, size)
     button.baseAction = index  -- Store the base action for reference
-    
+    button.bindCommand = GetButtonBindCommand(index)
+
     -- Setup action button
     button:SetAttribute("type", "action")
     button:RegisterForClicks("AnyUp")
-    
+
     if index <= 12 then
         -- Buttons 1-12: Mirror Blizzard's main action bar (ActionButton1-12)
         -- The hook will sync these to match Blizzard's dynamic paging
         button:SetAttribute("action", index)
-        button:SetAttribute("commandName", "ACTIONBUTTON" .. index)
     else
-        -- Buttons 13-24: Mirror ActionBar 2 (MultiActionBar1 actions 73-84)
-        local multiBarAction = 72 + (index - 12)
+        -- Buttons 13-24: Mirror ActionBar 2 (MultiBarBottomLeft, slots 61-72)
+        -- local multiBarAction = 72 + (index - 12)
+        local multiBarAction = 60 + (index - 12)
         button:SetAttribute("action", multiBarAction)
-        button:SetAttribute("commandName", "MULTIACTIONBAR1BUTTON" .. (index - 12))
+    end
+    button:SetAttribute("commandName", button.bindCommand)
+
+    -- blizz UpdateHotkeys looks up ACTIONBUTTON<id>, put our label back after it
+    if button.UpdateHotkeys then
+        hooksecurefunc(button, "UpdateHotkeys", UpdateButtonHotkey)
     end
     
     -- Ensure the button's hit rectangle matches its size
@@ -730,23 +979,13 @@ local function CreateActionButton(parent, index, size)
     
     -- LibKeyBound support for keybinding
     button.GetBindingAction = function(self)
-        if self.baseAction and self.baseAction <= 12 then
-            return "ACTIONBUTTON" .. self.baseAction
-        elseif self.baseAction and self.baseAction <= 24 then
-            -- Use CLICK bindings for buttons 13-24 (more reliable for custom addon buttons)
-            return "CLICK JG13_Button" .. self.baseAction .. ":LeftButton"
-        end
-        return nil
+        return self.bindCommand
     end
-    
+
     button.GetHotkey = function(self)
-        local action = self:GetBindingAction()
-        if not action then
-            return ""
-        end
-        local key = GetBindingKey(action)
+        local key = GetBindingKey(self.bindCommand)
         if key then
-            return GetBindingText(key, "KEY_", 1)
+            return GetBindingText(key, 1)
         end
         return ""
     end
@@ -811,48 +1050,23 @@ end
 -- Focus Row System
 --------------------------------------------------------------------------------
 
-local function GetFocusRowConfig()
-    local specID = GetCurrentSpecID()
-    if specID and specID > 0 and JarsG13BarsCharDB.focusRows then
-        return JarsG13BarsCharDB.focusRows[specID]
-    end
-    return nil
+local function GetFocusRowConfig(barIndex)
+    return activeFocusProfile[barIndex]
 end
 
-local function GetOrCreateFocusRowConfig()
-    local specID = GetCurrentSpecID()
-    if not specID or specID == 0 then return nil end
-    if not JarsG13BarsCharDB.focusRows then
-        JarsG13BarsCharDB.focusRows = {}
+local function GetOrCreateFocusRowConfig(barIndex)
+    if not activeFocusProfile[barIndex] or not activeFocusProfile[barIndex].slots then
+        activeFocusProfile[barIndex] = CreateDefaultFocusProfile()
     end
-    if not JarsG13BarsCharDB.focusRows[specID] then
-        JarsG13BarsCharDB.focusRows[specID] = {
-            enabled = false,
-            slots = {},
-            buttonSize = 40,
-            padding = 4,
-            posX = 0,
-            posY = -200,
-            bgOpacity = 0.3,
-            locked = true,
-            nonInteractive = false,
-            combatOnly = false,
-        }
-    end
-    return JarsG13BarsCharDB.focusRows[specID]
+    return activeFocusProfile[barIndex]
 end
 
 local focusBtnCounter = 0
-local function CreateFocusRowButton(parent, slotID, size)
-    focusBtnCounter = focusBtnCounter + 1
-    local btn = CreateFrame("CheckButton", "JG13_FocusBtn" .. focusBtnCounter, parent, "ActionBarButtonTemplate")
-    btn:SetSize(size, size)
-    btn:SetAttribute("type", "action")
-    btn:SetAttribute("action", slotID)
-    btn:RegisterForClicks("AnyUp")
-    btn:SetHitRectInsets(0, 0, 0, 0)
+local focusBtnPool = {}  -- recycled focus button frames
+local focusRebuildTimer = { nil, nil }  -- debounce handle for BuildFocusRow per bar
 
-    -- Clean up visuals (same as main bar buttons)
+-- One-time visual setup for a freshly created focus button
+local function InitFocusButtonVisuals(btn)
     if btn.Border then btn.Border:ClearAllPoints(); btn.Border:SetAllPoints(btn) end
     if btn.IconBorder then btn.IconBorder:ClearAllPoints(); btn.IconBorder:SetAllPoints(btn) end
     if btn.NormalTexture then
@@ -888,7 +1102,6 @@ local function CreateFocusRowButton(parent, slotID, size)
         pushed:SetDrawLayer("OVERLAY", 1)
     end
 
-    -- Icon - fill entire button (same as main bar)
     if btn.icon then
         btn.icon:SetTexCoord(0, 1, 0, 1)
         btn.icon:ClearAllPoints()
@@ -896,15 +1109,48 @@ local function CreateFocusRowButton(parent, slotID, size)
         btn.icon:SetDrawLayer("BACKGROUND", 0)
     end
 
-    -- Cooldown - fill entire button
     if not btn.cooldown then
         btn.cooldown = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
     end
     btn.cooldown:ClearAllPoints()
     btn.cooldown:SetAllPoints(btn)
     btn.cooldown:SetDrawEdge(false)
+end
 
-    -- Count text - same scaling as main bar
+-- Recycle a button back into the pool
+local focusPoolParent = CreateFrame("Frame")
+focusPoolParent:Hide()
+
+local function ReleaseFocusButton(btn)
+    btn:Hide()
+    -- btn:UnregisterAllEvents()
+    -- btn:SetParent(nil)
+    btn:SetParent(focusPoolParent)
+    btn:ClearAllPoints()
+    btn:EnableMouse(true)
+    table.insert(focusBtnPool, btn)
+end
+
+-- Get a focus button from the pool or create a new one
+local function AcquireFocusButton(parent, slotID, size)
+    local btn = table.remove(focusBtnPool)
+    if not btn then
+        -- No pooled button available — create a new one
+        focusBtnCounter = focusBtnCounter + 1
+        btn = CreateFrame("CheckButton", "JG13_FocusBtn" .. focusBtnCounter, parent, "ActionBarButtonTemplate")
+        btn:RegisterForClicks("AnyUp")
+        btn:SetHitRectInsets(0, 0, 0, 0)
+        InitFocusButtonVisuals(btn)
+    else
+        -- Recycled — re-parent and re-register events
+        btn:SetParent(parent)
+    end
+
+    btn:SetSize(size, size)
+    btn:SetAttribute("type", "action")
+    btn:SetAttribute("action", slotID)
+
+    -- Scale fonts to current size
     if btn.Count then
         btn.Count:ClearAllPoints()
         btn.Count:SetPoint("CENTER", btn, "CENTER", 0, 0)
@@ -921,7 +1167,6 @@ local function CreateFocusRowButton(parent, slotID, size)
         btn.Count:SetFont(fontFace, math.max(24, size * 0.7), fontFlags or "OUTLINE")
     end
 
-    -- Hotkey text - same scaling as main bar
     if btn.HotKey then
         local fontFace, _, fontFlags = btn.HotKey:GetFont()
         if not fontFace or fontFace == "" then
@@ -931,7 +1176,6 @@ local function CreateFocusRowButton(parent, slotID, size)
         btn.HotKey:SetFont(fontFace, math.max(8, size * 0.2), fontFlags)
     end
 
-    -- Name text - same scaling as main bar
     if btn.Name then
         local fontFace, _, fontFlags = btn.Name:GetFont()
         if not fontFace or fontFace == "" then
@@ -941,100 +1185,159 @@ local function CreateFocusRowButton(parent, slotID, size)
         btn.Name:SetFont(fontFace, math.max(8, size * 0.15), fontFlags)
     end
 
+    btn:Show()
     return btn
 end
 
-local function DestroyFocusRow()
-    for _, btn in ipairs(focusRowButtons) do
-        btn:Hide()
-        btn:SetParent(nil)
-    end
-    wipe(focusRowButtons)
-    if focusRowFrame then
-        focusRowFrame:Hide()
-        focusRowFrame:SetParent(nil)
-        focusRowFrame = nil
-    end
-end
+-- focus row frame is built once per bar and reused
+local function GetFocusRowFrame(barIndex)
+    if focusRowFrame[barIndex] then return focusRowFrame[barIndex] end
 
-local function BuildFocusRow()
-    if InCombatLockdown() then
-        pendingFocusRowUpdate = true
-        return
-    end
-
-    DestroyFocusRow()
-
-    local cfg = GetFocusRowConfig()
-    if not cfg or not cfg.enabled or #cfg.slots == 0 then return end
-
-    local size = cfg.buttonSize or 40
-    local padding = cfg.padding or 4
-    local count = #cfg.slots
-    local totalWidth = (size * count) + (padding * (count - 1))
-
-    focusRowFrame = CreateFrame("Frame", "JG13_FocusRow", UIParent)
-    focusRowFrame:SetSize(totalWidth + 8, size + 8)
-    focusRowFrame:SetPoint("CENTER", UIParent, "CENTER", cfg.posX or 0, cfg.posY or -200)
-    focusRowFrame:SetMovable(true)
-    focusRowFrame:SetClampedToScreen(true)
-    focusRowFrame:EnableMouse(not cfg.locked)
-    focusRowFrame:RegisterForDrag("LeftButton")
-    focusRowFrame:SetScript("OnDragStart", function(self)
-        if not cfg.locked then self:StartMoving() end
+    local f = CreateFrame("Frame", "JG13_FocusRow" .. barIndex, UIParent)
+    focusRowFrame[barIndex] = f
+    f:SetMovable(true)
+    f:SetClampedToScreen(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(self)
+        if not activeFocusProfile[barIndex].locked and not InCombatLockdown() then self:StartMoving() end
     end)
-    focusRowFrame:SetScript("OnDragStop", function(self)
+    f:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         local _, _, _, x, y = self:GetPoint(1)
-        cfg.posX = x
-        cfg.posY = y
+        activeFocusProfile[barIndex].posX = x
+        activeFocusProfile[barIndex].posY = y
+        PersistActiveFocusProfile(barIndex)
+        self.UpdateCoordLabel()
     end)
 
     -- Background
-    local bg = focusRowFrame:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints()
-    bg:SetColorTexture(0, 0, 0, cfg.bgOpacity or 0.3)
-    focusRowFrame.bg = bg
+    f.bg = f:CreateTexture(nil, "BACKGROUND")
+    f.bg:SetAllPoints()
 
     -- Unlock border indicator
-    local unlockBorder = focusRowFrame:CreateTexture(nil, "OVERLAY", nil, 7)
+    local unlockBorder = f:CreateTexture(nil, "OVERLAY", nil, 7)
     unlockBorder:SetPoint("TOPLEFT", -2, 2)
     unlockBorder:SetPoint("BOTTOMRIGHT", 2, -2)
     unlockBorder:SetColorTexture(0, 1, 0, 0.3)
-    if cfg.locked then unlockBorder:Hide() else unlockBorder:Show() end
-    focusRowFrame.unlockBorder = unlockBorder
+    f.unlockBorder = unlockBorder
 
-    -- Create buttons
-    for i, slotID in ipairs(cfg.slots) do
-        local btn = CreateFocusRowButton(focusRowFrame, slotID, size)
-        btn:SetPoint("LEFT", focusRowFrame, "LEFT", 4 + (i - 1) * (size + padding), 0)
-        -- Non-interactive: disable mouse on buttons so they're display-only
-        if cfg.nonInteractive then
-            btn:EnableMouse(false)
-        end
-        focusRowButtons[i] = btn
+    -- Nudge buttons + coords, only shown when unlocked
+    local coordLabel = f:CreateFontString(nil, "OVERLAY")
+    coordLabel:SetFont("Fonts\\FRIZQT__.TTF", 9, "OUTLINE")
+    coordLabel:SetTextColor(0, 1, 0)
+    coordLabel:SetPoint("TOP", f, "BOTTOM", 0, -2)
+    f.coordLabel = coordLabel
+    f.UpdateCoordLabel = function()
+        coordLabel:SetText(string.format("%.0f, %.0f", activeFocusProfile[barIndex].posX or 0, activeFocusProfile[barIndex].posY or 0))
     end
 
-    -- Combat-only visibility
-    if cfg.combatOnly then
-        focusRowFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
-        focusRowFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-        focusRowFrame:SetScript("OnEvent", function(self, event)
-            if event == "PLAYER_REGEN_DISABLED" then
-                self:Show()
-            elseif event == "PLAYER_REGEN_ENABLED" then
-                self:Hide()
-            end
+    local function MakeNudgeBtn(label, dx, dy, anchorPoint, relPoint, offX, offY)
+        local nb = CreateFrame("Button", nil, f)
+        nb:SetSize(16, 16)
+        nb:SetPoint(anchorPoint, f, relPoint, offX, offY)
+        local nbt = nb:CreateFontString(nil, "OVERLAY")
+        nbt:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
+        nbt:SetTextColor(0, 1, 0)
+        nbt:SetPoint("CENTER")
+        nbt:SetText(label)
+        nb:SetScript("OnClick", function()
+            activeFocusProfile[barIndex].posX = (activeFocusProfile[barIndex].posX or 0) + dx
+            activeFocusProfile[barIndex].posY = (activeFocusProfile[barIndex].posY or 0) + dy
+            PersistActiveFocusProfile(barIndex)
+            f.UpdateCoordLabel()
+            RunWhenSafe("focusmove" .. barIndex, function()
+                f:ClearAllPoints()
+                f:SetPoint("CENTER", UIParent, "CENTER", activeFocusProfile[barIndex].posX, activeFocusProfile[barIndex].posY)
+            end)
         end)
-        -- Only show if currently in combat
-        if not InCombatLockdown() then
-            focusRowFrame:Hide()
-        else
-            focusRowFrame:Show()
-        end
-    else
-        focusRowFrame:Show()
+        return nb
     end
+    f.nudges = {
+        MakeNudgeBtn("^",  0,  1, "BOTTOM", "TOP",    0,  2),
+        MakeNudgeBtn("v",  0, -1, "TOP",    "BOTTOM", 0, -2),
+        MakeNudgeBtn("<", -1,  0, "RIGHT",  "LEFT",  -2,  0),
+        MakeNudgeBtn(">",  1,  0, "LEFT",   "RIGHT",  2,  0),
+    }
+
+    f:Hide()
+    return f
+end
+
+BuildFocusRow = function(barIndex)
+    RunWhenSafe("focus" .. barIndex, function()
+        for _, btn in ipairs(focusRowButtons[barIndex]) do
+            ReleaseFocusButton(btn)
+        end
+        wipe(focusRowButtons[barIndex])
+
+        local f = GetFocusRowFrame(barIndex)
+        local cfg = GetFocusRowConfig(barIndex)
+        if not cfg or not cfg.enabled or #cfg.slots == 0 then
+            UnregisterStateDriver(f, "visibility")
+            f:Hide()
+            return
+        end
+
+        local size = cfg.buttonSize or 40
+        local padding = cfg.padding or 4
+        local count = #cfg.slots
+        local orientation = cfg.orientation or "horizontal"
+        local isVertical = (orientation == "vertical")
+
+        local frameW, frameH
+        if isVertical then
+            frameW = size + 8
+            frameH = (size * count) + (padding * (count - 1)) + 8
+        else
+            frameW = (size * count) + (padding * (count - 1)) + 8
+            frameH = size + 8
+        end
+
+        f:SetSize(frameW, frameH)
+        f:ClearAllPoints()
+        f:SetPoint("CENTER", UIParent, "CENTER", cfg.posX or 0, cfg.posY or -200)
+        f:EnableMouse(not cfg.locked)
+        f.bg:SetColorTexture(0, 0, 0, cfg.bgOpacity or 0.3)
+        f.unlockBorder:SetShown(not cfg.locked)
+        f.coordLabel:SetShown(not cfg.locked)
+        f.UpdateCoordLabel()
+        for _, nb in ipairs(f.nudges) do
+            nb:SetShown(not cfg.locked)
+        end
+
+        -- Create buttons
+        for i, slotID in ipairs(cfg.slots) do
+            local btn = AcquireFocusButton(f, slotID, size)
+            if isVertical then
+                btn:SetPoint("TOP", f, "TOP", 0, -(4 + (i - 1) * (size + padding)))
+            else
+                btn:SetPoint("LEFT", f, "LEFT", 4 + (i - 1) * (size + padding), 0)
+            end
+            -- Non-interactive: disable mouse on buttons so they're display-only
+            if cfg.nonInteractive then
+                btn:EnableMouse(false)
+            end
+            focusRowButtons[barIndex][i] = btn
+        end
+
+        -- Combat-only visibility, secure driver so it works in combat
+        if cfg.combatOnly then
+            RegisterStateDriver(f, "visibility", "[combat] show; hide")
+        else
+            UnregisterStateDriver(f, "visibility")
+            f:Show()
+        end
+    end)
+end
+
+-- Debounced version of BuildFocusRow for slider callbacks.
+-- Coalesces rapid-fire calls (e.g. dragging a slider) into a single rebuild.
+local function BuildFocusRowDebounced(barIndex)
+    if focusRebuildTimer[barIndex] then focusRebuildTimer[barIndex]:Cancel() end
+    focusRebuildTimer[barIndex] = C_Timer.NewTimer(0.05, function()
+        focusRebuildTimer[barIndex] = nil
+        BuildFocusRow(barIndex)
+    end)
 end
 
 -- Layout positioning functions
@@ -1266,18 +1569,7 @@ local function CreateMainFrame()
     SetupSecurePageDriver()
 
     -- Apply overall frame alpha and hide-on-mouse-out from active profile
-    if activeProfile.hideOnMouseOut then
-        frame:SetAlpha(0)
-        frame:SetScript("OnUpdate", function(self)
-            if self:IsMouseOver() then
-                self:SetAlpha(activeProfile.frameAlpha or 1.0)
-            else
-                self:SetAlpha(0)
-            end
-        end)
-    else
-        frame:SetAlpha(activeProfile.frameAlpha or 1.0)
-    end
+    SetMouseOutFade(frame)
 
     return frame
 end
@@ -1307,11 +1599,15 @@ eventFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 eventFrame:RegisterEvent("PLAYER_ENTER_COMBAT")
 eventFrame:RegisterEvent("PLAYER_LEAVE_COMBAT")
-eventFrame:RegisterEvent("UNIT_ENTERED_VEHICLE")
-eventFrame:RegisterEvent("UNIT_EXITED_VEHICLE")
+eventFrame:RegisterUnitEvent("UNIT_ENTERED_VEHICLE", "player")
+eventFrame:RegisterUnitEvent("UNIT_EXITED_VEHICLE", "player")
 eventFrame:RegisterEvent("UPDATE_OVERRIDE_ACTIONBAR")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+-- eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+eventFrame:RegisterEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED")
+eventFrame:RegisterEvent("UPDATE_BINDINGS")
+
+local firstEnterWorld = true
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -1319,11 +1615,12 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         if addonName == "JarsG13Bars" then
             InitDB()
             LoadSpecLayout()
+            for i = 1, NUM_FOCUS_BARS do LoadFocusSpecLayout(i) end
             HideDefaultBars()
             mainFrame = CreateMainFrame()
 
             CreateConfigWindow()
-            BuildFocusRow()
+            for i = 1, NUM_FOCUS_BARS do BuildFocusRow(i) end
 
             -- Setup override bindings and update keybinds after a delay to ensure buttons are ready
             C_Timer.After(1, function()
@@ -1338,23 +1635,37 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "PLAYER_ENTERING_WORLD" then
-        HideDefaultBars()
         C_Timer.After(0.5, function()
             UpdateButtons()
-            -- Spec is now available; rebuild config and focus row if needed
-            if GetCurrentSpecID() > 0 then
-                BuildFocusRow()
-                if RefreshConfigUI then RefreshConfigUI(true) end
+            -- spec shows up by now, only need this once tho
+            if firstEnterWorld and GetCurrentSpecID() > 0 then
+                firstEnterWorld = false
+                for i = 1, NUM_FOCUS_BARS do
+                    LoadFocusSpecLayout(i)
+                    BuildFocusRow(i)
+                end
+                if RefreshConfigUI then RefreshConfigUI() end
+                for i = 1, NUM_FOCUS_BARS do
+                    if RefreshFocusConfigUI[i] then RefreshFocusConfigUI[i](true) end
+                end
             end
         end)
 
-    elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
+    elseif event == "ACTIVE_PLAYER_SPECIALIZATION_CHANGED" then
         LoadSpecLayout()
+        for i = 1, NUM_FOCUS_BARS do LoadFocusSpecLayout(i) end
         ApplyActiveProfile()
         HideDefaultBars()
         UpdateKeybinds()
-        BuildFocusRow()
+        for i = 1, NUM_FOCUS_BARS do BuildFocusRow(i) end
         if RefreshConfigUI then RefreshConfigUI() end
+        for i = 1, NUM_FOCUS_BARS do
+            if RefreshFocusConfigUI[i] then RefreshFocusConfigUI[i](true) end
+        end
+
+    elseif event == "UPDATE_BINDINGS" then
+        UpdateOverrideBindings()
+        UpdateKeybinds()
 
     elseif event == "ACTIONBAR_SLOT_CHANGED" or event == "UPDATE_BONUS_ACTIONBAR" or
            event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE" or
@@ -1363,17 +1674,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         UpdateButtons()
 
     elseif event == "PLAYER_REGEN_ENABLED" then
-        if pendingBindingUpdate then
-            UpdateOverrideBindings()
-            UpdateKeybinds()
-        end
-        if pendingDriverUpdate then
-            RefreshStateDriver()
-        end
-        if pendingFocusRowUpdate then
-            pendingFocusRowUpdate = false
-            BuildFocusRow()
-        end
+        FlushSafeQueue()
+        UpdateKeybinds()
 
     elseif event == "ACTIONBAR_UPDATE_COOLDOWN" or
            event == "ACTIONBAR_UPDATE_USABLE" or event == "SPELL_UPDATE_USABLE" or
@@ -1387,10 +1689,13 @@ end)
 -- Function to update main frame position
 local function UpdateFramePosition(yOffset)
     if mainFrame then
-        mainFrame:ClearAllPoints()
-        mainFrame:SetPoint("TOP", UIParent, "TOP", 0, yOffset)
         activeProfile.positionY = yOffset
         PersistActiveProfile()
+        RunWhenSafe("profile", function()
+            mainFrame:ClearAllPoints()
+            mainFrame:SetPoint("TOP", UIParent, "TOP", 0, activeProfile.positionY or -400)
+            mainFrame:SetScale(activeProfile.scale or 1.0)
+        end)
     end
 end
 
@@ -1406,9 +1711,13 @@ end
 -- Function to update frame scale
 local function UpdateScale(scale)
     if mainFrame then
-        mainFrame:SetScale(scale)
         activeProfile.scale = scale
         PersistActiveProfile()
+        RunWhenSafe("profile", function()
+            mainFrame:ClearAllPoints()
+            mainFrame:SetPoint("TOP", UIParent, "TOP", 0, activeProfile.positionY or -400)
+            mainFrame:SetScale(activeProfile.scale or 1.0)
+        end)
     end
 end
 
@@ -1427,24 +1736,14 @@ end
 local function ApplyHideOnMouseOut(enabled)
     if not mainFrame then return end
     activeProfile.hideOnMouseOut = enabled
-    if enabled then
-        mainFrame:SetAlpha(0)
-        mainFrame:SetScript("OnUpdate", function(self)
-            if self:IsMouseOver() then
-                self:SetAlpha(activeProfile.frameAlpha or 1.0)
-            else
-                self:SetAlpha(0)
-            end
-        end)
-    else
-        mainFrame:SetAlpha(activeProfile.frameAlpha or 1.0)
-        mainFrame:SetScript("OnUpdate", nil)
-    end
+    SetMouseOutFade(mainFrame)
     PersistActiveProfile()
 end
 
 -- Create config window
 local configFrame
+local focusConfigFrame = {}
+local CreateFocusConfigWindow
 
 -- Modern UI color palette
 local UI = {
@@ -1909,14 +2208,14 @@ CreateConfigWindow = function()
         activeProfile.layoutMode = "G13"
         g13Btn:SetActive(true)
         keyzenBtn:SetActive(false)
-        if mainFrame then ApplyG13Layout(mainFrame) end
+        ApplyLayoutMode()
         PersistActiveProfile()
     end)
     keyzenBtn = createLayoutToggle(layoutRow2, "Keyzen", 136, activeProfile.layoutMode == "Keyzen", function()
         activeProfile.layoutMode = "Keyzen"
         g13Btn:SetActive(false)
         keyzenBtn:SetActive(true)
-        if mainFrame then ApplyKeyzenLayout(mainFrame) end
+        ApplyLayoutMode()
         PersistActiveProfile()
     end)
 
@@ -2011,161 +2310,19 @@ CreateConfigWindow = function()
         table.insert(pagingSpinners, sp)
     end
 
-    -- === FOCUS ROW SECTION ===
+    -- === FOCUS BAR SECTION ===
     advanceY(SECTION_SPACING - SPACING)
-    local secFocus = CreateSectionHeader(content, "Focus Row")
+    local secFocus = CreateSectionHeader(content, "Focus Bars")
     placeWidget(secFocus, 20)
 
-    local focusCfg = GetOrCreateFocusRowConfig()
-    local focusSlotBoxes = {}
-
-    if focusCfg then
-        -- Enable toggle
-        local focusEnableCheck = CreateModernCheck(content, "Enable Focus Row", focusCfg.enabled, function(val)
-            focusCfg.enabled = val
-            BuildFocusRow()
-        end)
-        placeWidget(focusEnableCheck, 22)
-
-        -- Button size slider (24-120)
-        local focusSizeSlider = CreateModernSlider(content, "JG13_FocusSizeSlider", "Button Size",
-            24, 120, focusCfg.buttonSize or 40, 2, CONTENT_WIDTH,
-            function(v) return tostring(math.floor(v)) .. "px" end,
-            function(val)
-                focusCfg.buttonSize = val
-                BuildFocusRow()
-            end)
-        placeWidget(focusSizeSlider, 42)
-
-        -- Button padding slider (0-20)
-        local focusPadSlider = CreateModernSlider(content, "JG13_FocusPadSlider", "Button Padding",
-            0, 20, focusCfg.padding or 4, 1, CONTENT_WIDTH,
-            function(v) return tostring(math.floor(v)) .. "px" end,
-            function(val)
-                focusCfg.padding = val
-                BuildFocusRow()
-            end)
-        placeWidget(focusPadSlider, 42)
-
-        -- Background opacity slider
-        local focusBgSlider = CreateModernSlider(content, "JG13_FocusBgSlider", "Background Opacity",
-            0, 1, focusCfg.bgOpacity or 0.3, 0.05, CONTENT_WIDTH,
-            function(v) return string.format("%.0f%%", v * 100) end,
-            function(val)
-                focusCfg.bgOpacity = val
-                if focusRowFrame and focusRowFrame.bg then
-                    focusRowFrame.bg:SetColorTexture(0, 0, 0, val)
-                end
-            end)
-        placeWidget(focusBgSlider, 42)
-
-        -- Lock/Unlock toggle
-        local focusLockCheck = CreateModernCheck(content, "Lock Position", focusCfg.locked ~= false, function(val)
-            focusCfg.locked = val
-            if focusRowFrame then
-                focusRowFrame:EnableMouse(not val)
-                if focusRowFrame.unlockBorder then
-                    if val then focusRowFrame.unlockBorder:Hide() else focusRowFrame.unlockBorder:Show() end
-                end
+    for bi = 1, NUM_FOCUS_BARS do
+        local focusConfigBtn = CreateModernButton(content, "Focus Bar " .. bi .. " Config", 180, 30, function()
+            CreateFocusConfigWindow(bi)
+            if focusConfigFrame[bi] then
+                focusConfigFrame[bi]:SetShown(not focusConfigFrame[bi]:IsShown())
             end
         end)
-        placeWidget(focusLockCheck, 22)
-
-        -- Non-interactive toggle
-        local focusNonInterCheck = CreateModernCheck(content, "Non-Interactive (display only)", focusCfg.nonInteractive or false, function(val)
-            focusCfg.nonInteractive = val
-            BuildFocusRow()
-        end)
-        placeWidget(focusNonInterCheck, 22)
-
-        -- Combat-only toggle
-        local focusCombatCheck = CreateModernCheck(content, "Only Show In Combat", focusCfg.combatOnly or false, function(val)
-            focusCfg.combatOnly = val
-            BuildFocusRow()
-        end)
-        placeWidget(focusCombatCheck, 22)
-
-        -- Slot list label
-        local slotLabel = content:CreateFontString(nil, "OVERLAY")
-        slotLabel:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
-        slotLabel:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
-        slotLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
-        slotLabel:SetText("Action Slots (1-120):")
-        advanceY(18)
-
-        -- Existing slot rows
-        for i, slotID in ipairs(focusCfg.slots) do
-            local row = CreateFrame("Frame", nil, content)
-            row:SetSize(CONTENT_WIDTH, 26)
-            row:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
-
-            local idx = i
-
-            -- Slot number input
-            local slotBox = CreateModernEditBox(row, 60, 24)
-            slotBox:SetPoint("LEFT", 0, 0)
-            slotBox:SetText(tostring(slotID))
-            slotBox:SetScript("OnEnterPressed", function(self)
-                local val = tonumber(self:GetText())
-                if val and val >= 1 and val <= 120 then
-                    focusCfg.slots[idx] = math.floor(val)
-                    BuildFocusRow()
-                else
-                    self:SetText(tostring(focusCfg.slots[idx]))
-                end
-                self:ClearFocus()
-            end)
-            focusSlotBoxes[i] = slotBox
-
-            -- Remove button (anchor from right edge first)
-            local removeBtn = CreateModernButton(row, "x", 24, 22, function()
-                table.remove(focusCfg.slots, idx)
-                BuildFocusRow()
-                if RefreshConfigUI then RefreshConfigUI(true) end
-            end)
-            removeBtn:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-
-            -- Move up button (to left of remove)
-            if i > 1 then
-                local upBtn = CreateModernButton(row, "^", 24, 22, function()
-                    focusCfg.slots[idx], focusCfg.slots[idx - 1] = focusCfg.slots[idx - 1], focusCfg.slots[idx]
-                    BuildFocusRow()
-                    if RefreshConfigUI then RefreshConfigUI(true) end
-                end)
-                upBtn:SetPoint("RIGHT", removeBtn, "LEFT", -4, 0)
-            end
-
-            -- Slot description (between input and buttons, truncated)
-            local slotDesc = row:CreateFontString(nil, "OVERLAY")
-            slotDesc:SetFont("Fonts\\FRIZQT__.TTF", 10, "")
-            slotDesc:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
-            slotDesc:SetPoint("LEFT", slotBox, "RIGHT", 8, 0)
-            slotDesc:SetPoint("RIGHT", removeBtn, "LEFT", -56, 0)
-            slotDesc:SetJustifyH("LEFT")
-            slotDesc:SetWordWrap(false)
-            local barNum = math.ceil(slotID / 12)
-            local btnNum = ((slotID - 1) % 12) + 1
-            slotDesc:SetText("Bar " .. barNum .. " Btn " .. btnNum)
-
-            advanceY(28)
-        end
-
-        -- Add slot button (max 8)
-        if #focusCfg.slots < 8 then
-            local addSlotBtn = CreateModernButton(content, "+ Add Slot", 120, 26, function()
-                table.insert(focusCfg.slots, 1)
-                BuildFocusRow()
-                if RefreshConfigUI then RefreshConfigUI(true) end
-            end)
-            placeWidget(addSlotBtn, 26)
-        end
-    else
-        local noSpecLabel = content:CreateFontString(nil, "OVERLAY")
-        noSpecLabel:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
-        noSpecLabel:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
-        noSpecLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
-        noSpecLabel:SetText("Spec not detected — focus row unavailable")
-        advanceY(18)
+        placeWidget(focusConfigBtn, 30)
     end
 
     -- === ACTIONS SECTION ===
@@ -2190,17 +2347,21 @@ CreateConfigWindow = function()
     placeWidget(keybindBtn, 30)
 
     -- Update button text when LibKeyBound state changes
-    LibKeyBound.RegisterCallback(keybindBtn, "LIBKEYBOUND_ENABLED", function()
-        keybindBtn:SetText("Exit Keybind Mode")
-    end)
-    LibKeyBound.RegisterCallback(keybindBtn, "LIBKEYBOUND_DISABLED", function()
-        keybindBtn:SetText("Set Keybinds")
-    end)
+    if LibKeyBound then
+        LibKeyBound.RegisterCallback(keybindBtn, "LIBKEYBOUND_ENABLED", function()
+            keybindBtn:SetText("Exit Keybind Mode")
+        end)
+        LibKeyBound.RegisterCallback(keybindBtn, "LIBKEYBOUND_DISABLED", function()
+            keybindBtn:SetText("Set Keybinds")
+        end)
+    end
 
     -- Reset button
     local resetBtn = CreateModernButton(content, "Reset to Defaults", 160, 30, function()
         activeProfile = CreateDefaultProfile()
         currentLayoutName = nil
+        JarsG13BarsDB.lastActiveLayout = nil
+        PersistActiveProfile()
         ApplyActiveProfile()
         HideDefaultBars()
         UpdateKeybinds()
@@ -2222,7 +2383,7 @@ CreateConfigWindow = function()
             local wasShown = configFrame:IsShown()
             local point, rel, relPoint, cx, cy = configFrame:GetPoint(1)
             configFrame:Hide()
-            configFrame:SetParent(nil)
+            -- configFrame:SetParent(nil)
             configFrame = nil
             CreateConfigWindow()
             if configFrame and point then
@@ -2254,11 +2415,428 @@ CreateConfigWindow = function()
     configFrame:Hide()
 end
 
+-- ============================================================
+-- FOCUS BAR CONFIG WINDOW (separate from main config)
+-- ============================================================
+CreateFocusConfigWindow = function(barIndex)
+    if focusConfigFrame[barIndex] then
+        return
+    end
+
+    local PANEL_WIDTH = 440
+    local CONTENT_WIDTH = PANEL_WIDTH - 90
+    local PANEL_HEIGHT = 620
+
+    local f = CreateFrame("Frame", "JG13_FocusConfigFrame" .. barIndex, UIParent, "BackdropTemplate")
+    focusConfigFrame[barIndex] = f
+    f:SetSize(PANEL_WIDTH, PANEL_HEIGHT)
+    f:SetPoint("CENTER", 240 + (barIndex - 1) * 60, 0)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetFrameStrata("DIALOG")
+
+    f:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        edgeSize = 1,
+    })
+    f:SetBackdropColor(UI.bg[1], UI.bg[2], UI.bg[3], UI.bg[4])
+    f:SetBackdropBorderColor(UI.border[1], UI.border[2], UI.border[3], UI.border[4])
+
+    -- Title bar
+    local titleBar = CreateFrame("Frame", nil, f)
+    titleBar:SetHeight(36)
+    titleBar:SetPoint("TOPLEFT", 0, 0)
+    titleBar:SetPoint("TOPRIGHT", 0, 0)
+    local titleBg = titleBar:CreateTexture(nil, "BACKGROUND")
+    titleBg:SetAllPoints()
+    titleBg:SetColorTexture(UI.header[1], UI.header[2], UI.header[3], UI.header[4])
+
+    local titleText = titleBar:CreateFontString(nil, "OVERLAY")
+    titleText:SetFont("Fonts\\FRIZQT__.TTF", 13, "")
+    titleText:SetTextColor(UI.accent[1], UI.accent[2], UI.accent[3])
+    titleText:SetPoint("LEFT", 16, 0)
+    titleText:SetText("Focus Bar " .. barIndex .. " Config")
+
+    local closeBtn = CreateFrame("Button", nil, titleBar)
+    closeBtn:SetSize(36, 36)
+    closeBtn:SetPoint("RIGHT", 0, 0)
+    local closeTxt = closeBtn:CreateFontString(nil, "OVERLAY")
+    closeTxt:SetFont("Fonts\\FRIZQT__.TTF", 16, "")
+    closeTxt:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
+    closeTxt:SetPoint("CENTER")
+    closeTxt:SetText("x")
+    closeBtn:SetScript("OnEnter", function() closeTxt:SetTextColor(1, 0.4, 0.4) end)
+    closeBtn:SetScript("OnLeave", function() closeTxt:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3]) end)
+    closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+    -- Scroll frame
+    local scrollFrame = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 30, -2)
+    scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -42, 4)
+    f.scrollFrame = scrollFrame
+
+    if scrollFrame.ScrollBar then
+        local sb = scrollFrame.ScrollBar
+        if sb.Background then sb.Background:Hide() end
+    end
+
+    local content = CreateFrame("Frame", nil, scrollFrame)
+    content:SetWidth(CONTENT_WIDTH)
+    scrollFrame:SetScrollChild(content)
+
+    local yPos = -16
+    local SPACING = 14
+    local SECTION_SPACING = 22
+
+    local function advanceY(amount) yPos = yPos - amount end
+    local function placeWidget(widget, height)
+        widget:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
+        widget:SetWidth(CONTENT_WIDTH)
+        advanceY((height or 42) + SPACING)
+    end
+
+    -- === FOCUS PROFILES SECTION ===
+    local secProfiles = CreateSectionHeader(content, "Focus Bar " .. barIndex .. " Profiles")
+    placeWidget(secProfiles, 20)
+
+    -- Spec + layout label
+    local focusSpecLabel = content:CreateFontString(nil, "OVERLAY")
+    focusSpecLabel:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    focusSpecLabel:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
+    focusSpecLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
+    advanceY(16 + SPACING)
+
+    local function UpdateFocusSpecLabel()
+        local specName = GetCurrentSpecName()
+        local layoutText = currentFocusLayoutName[barIndex] and (": " .. currentFocusLayoutName[barIndex]) or ": (none)"
+        focusSpecLabel:SetText("Spec: " .. specName .. " | Focus " .. barIndex .. " Layout" .. layoutText)
+    end
+    UpdateFocusSpecLabel()
+
+    -- Layout name input + Save button row
+    local profileRow = CreateFrame("Frame", nil, content)
+    profileRow:SetSize(CONTENT_WIDTH, 26)
+    placeWidget(profileRow, 26)
+
+    local nameBox = CreateModernEditBox(profileRow, CONTENT_WIDTH - 80, 26)
+    nameBox:SetPoint("LEFT", 0, 0)
+    if currentFocusLayoutName[barIndex] then
+        nameBox:SetText(currentFocusLayoutName[barIndex])
+    end
+
+    local saveBtn = CreateModernButton(profileRow, "Save", 72, 26, function()
+        local name = nameBox:GetText():trim()
+        if name ~= "" then
+            SaveFocusLayout(barIndex, name)
+        end
+    end)
+    saveBtn:SetPoint("RIGHT", 0, 0)
+
+    -- Load dropdown + Delete button row
+    local loadRow = CreateFrame("Frame", nil, content)
+    loadRow:SetSize(CONTENT_WIDTH, 26)
+    placeWidget(loadRow, 26)
+
+    local focusLayoutDropdown = CreateFrame("DropdownButton", nil, loadRow, "WowStyle1DropdownTemplate")
+    focusLayoutDropdown:SetPoint("LEFT", 0, 0)
+    focusLayoutDropdown:SetWidth(CONTENT_WIDTH - 80)
+    focusLayoutDropdown:SetDefaultText(currentFocusLayoutName[barIndex] or "Select a focus layout...")
+
+    focusLayoutDropdown:SetupMenu(function(_, rootDescription)
+        local names = GetSortedFocusLayoutNames(barIndex)
+        if #names == 0 then
+            rootDescription:CreateTitle("No saved focus layouts")
+            return
+        end
+        for _, name in ipairs(names) do
+            rootDescription:CreateButton(name, function()
+                LoadFocusLayout(barIndex, name)
+            end)
+        end
+    end)
+
+    local deleteBtn = CreateModernButton(loadRow, "Delete", 72, 26, function()
+        local name = nameBox:GetText():trim()
+        if name ~= "" then
+            DeleteFocusLayout(barIndex, name)
+        end
+    end)
+    deleteBtn:SetPoint("RIGHT", 0, 0)
+
+    -- === SETTINGS SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
+    local secSettings = CreateSectionHeader(content, "Settings")
+    placeWidget(secSettings, 20)
+
+    local focusCfg = GetOrCreateFocusRowConfig(barIndex)
+
+    -- Enable toggle
+    local focusEnableCheck = CreateModernCheck(content, "Enable Focus Bar", focusCfg.enabled, function(val)
+        activeFocusProfile[barIndex].enabled = val
+        PersistActiveFocusProfile(barIndex)
+        BuildFocusRow(barIndex)
+    end)
+    placeWidget(focusEnableCheck, 22)
+
+    -- Orientation toggle (Horizontal / Vertical)
+    local orientRow = CreateFrame("Frame", nil, content)
+    orientRow:SetSize(CONTENT_WIDTH, 24)
+
+    local orientLabel = orientRow:CreateFontString(nil, "OVERLAY")
+    orientLabel:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    orientLabel:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
+    orientLabel:SetPoint("LEFT", 0, 0)
+    orientLabel:SetText("Orientation:")
+
+    local hBtn = CreateModernButton(orientRow, "Horizontal", 90, 22, nil)
+    hBtn:SetPoint("LEFT", orientLabel, "RIGHT", 8, 0)
+    local vBtn = CreateModernButton(orientRow, "Vertical", 80, 22, nil)
+    vBtn:SetPoint("LEFT", hBtn, "RIGHT", 4, 0)
+
+    local function UpdateOrientBtnColors()
+        local cur = activeFocusProfile[barIndex].orientation or "horizontal"
+        if cur == "horizontal" then
+            hBtn.label:SetTextColor(UI.accent[1], UI.accent[2], UI.accent[3])
+            hBtn.bg:SetColorTexture(UI.accentDim[1], UI.accentDim[2], UI.accentDim[3], 0.4)
+            vBtn.label:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
+            vBtn.bg:SetColorTexture(UI.btnNormal[1], UI.btnNormal[2], UI.btnNormal[3], UI.btnNormal[4])
+        else
+            hBtn.label:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
+            hBtn.bg:SetColorTexture(UI.btnNormal[1], UI.btnNormal[2], UI.btnNormal[3], UI.btnNormal[4])
+            vBtn.label:SetTextColor(UI.accent[1], UI.accent[2], UI.accent[3])
+            vBtn.bg:SetColorTexture(UI.accentDim[1], UI.accentDim[2], UI.accentDim[3], 0.4)
+        end
+    end
+    UpdateOrientBtnColors()
+
+    hBtn:SetScript("OnClick", function()
+        activeFocusProfile[barIndex].orientation = "horizontal"
+        PersistActiveFocusProfile(barIndex)
+        BuildFocusRow(barIndex)
+        UpdateOrientBtnColors()
+    end)
+    vBtn:SetScript("OnClick", function()
+        activeFocusProfile[barIndex].orientation = "vertical"
+        PersistActiveFocusProfile(barIndex)
+        BuildFocusRow(barIndex)
+        UpdateOrientBtnColors()
+    end)
+
+    placeWidget(orientRow, 24)
+
+    -- Button size slider (24-120)
+    local focusSizeSlider = CreateModernSlider(content, "JG13_FocusSizeSlider" .. barIndex, "Button Size",
+        24, 120, focusCfg.buttonSize or 40, 2, CONTENT_WIDTH,
+        function(v) return tostring(math.floor(v)) .. "px" end,
+        function(val)
+            activeFocusProfile[barIndex].buttonSize = val
+            PersistActiveFocusProfile(barIndex)
+            BuildFocusRowDebounced(barIndex)
+        end)
+    placeWidget(focusSizeSlider, 42)
+
+    -- Button padding slider (0-20)
+    local focusPadSlider = CreateModernSlider(content, "JG13_FocusPadSlider" .. barIndex, "Button Padding",
+        0, 20, focusCfg.padding or 4, 1, CONTENT_WIDTH,
+        function(v) return tostring(math.floor(v)) .. "px" end,
+        function(val)
+            activeFocusProfile[barIndex].padding = val
+            PersistActiveFocusProfile(barIndex)
+            BuildFocusRowDebounced(barIndex)
+        end)
+    placeWidget(focusPadSlider, 42)
+
+    -- Background opacity slider
+    local focusBgSlider = CreateModernSlider(content, "JG13_FocusBgSlider" .. barIndex, "Background Opacity",
+        0, 1, focusCfg.bgOpacity or 0.3, 0.05, CONTENT_WIDTH,
+        function(v) return string.format("%.0f%%", v * 100) end,
+        function(val)
+            activeFocusProfile[barIndex].bgOpacity = val
+            PersistActiveFocusProfile(barIndex)
+            if focusRowFrame[barIndex] and focusRowFrame[barIndex].bg then
+                focusRowFrame[barIndex].bg:SetColorTexture(0, 0, 0, val)
+            end
+        end)
+    placeWidget(focusBgSlider, 42)
+
+    -- Lock/Unlock toggle
+    local focusLockCheck = CreateModernCheck(content, "Lock Position", focusCfg.locked ~= false, function(val)
+        activeFocusProfile[barIndex].locked = val
+        PersistActiveFocusProfile(barIndex)
+        -- Rebuild to add/remove nudge buttons
+        BuildFocusRow(barIndex)
+    end)
+    placeWidget(focusLockCheck, 22)
+
+    -- Non-interactive toggle
+    local focusNonInterCheck = CreateModernCheck(content, "Non-Interactive (display only)", focusCfg.nonInteractive or false, function(val)
+        activeFocusProfile[barIndex].nonInteractive = val
+        PersistActiveFocusProfile(barIndex)
+        BuildFocusRow(barIndex)
+    end)
+    placeWidget(focusNonInterCheck, 22)
+
+    -- Combat-only toggle
+    local focusCombatCheck = CreateModernCheck(content, "Only Show In Combat", focusCfg.combatOnly or false, function(val)
+        activeFocusProfile[barIndex].combatOnly = val
+        PersistActiveFocusProfile(barIndex)
+        BuildFocusRow(barIndex)
+    end)
+    placeWidget(focusCombatCheck, 22)
+
+    -- === SLOTS SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
+    local secSlots = CreateSectionHeader(content, "Action Slots")
+    placeWidget(secSlots, 20)
+
+    local slotLabel = content:CreateFontString(nil, "OVERLAY")
+    slotLabel:SetFont("Fonts\\FRIZQT__.TTF", 11, "")
+    slotLabel:SetTextColor(UI.text[1], UI.text[2], UI.text[3])
+    slotLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
+    slotLabel:SetText("Action Slots (1-180):")
+    advanceY(18)
+
+    -- Existing slot rows
+    for i, slotID in ipairs(focusCfg.slots) do
+        local row = CreateFrame("Frame", nil, content)
+        row:SetSize(CONTENT_WIDTH, 26)
+        row:SetPoint("TOPLEFT", content, "TOPLEFT", 0, yPos)
+
+        local idx = i
+
+        local slotBox = CreateModernEditBox(row, 60, 24)
+        slotBox:SetPoint("LEFT", 0, 0)
+        slotBox:SetText(tostring(slotID))
+        slotBox:SetScript("OnEnterPressed", function(self)
+            local val = tonumber(self:GetText())
+            if val and val >= 1 and val <= 180 then
+                activeFocusProfile[barIndex].slots[idx] = math.floor(val)
+                PersistActiveFocusProfile(barIndex)
+                BuildFocusRow(barIndex)
+            else
+                self:SetText(tostring(activeFocusProfile[barIndex].slots[idx]))
+            end
+            self:ClearFocus()
+        end)
+
+        local removeBtn = CreateModernButton(row, "x", 24, 22, function()
+            table.remove(activeFocusProfile[barIndex].slots, idx)
+            PersistActiveFocusProfile(barIndex)
+            BuildFocusRow(barIndex)
+            if RefreshFocusConfigUI[barIndex] then RefreshFocusConfigUI[barIndex](true) end
+        end)
+        removeBtn:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+
+        if i > 1 then
+            local upBtn = CreateModernButton(row, "^", 24, 22, function()
+                activeFocusProfile[barIndex].slots[idx], activeFocusProfile[barIndex].slots[idx - 1] = activeFocusProfile[barIndex].slots[idx - 1], activeFocusProfile[barIndex].slots[idx]
+                PersistActiveFocusProfile(barIndex)
+                BuildFocusRow(barIndex)
+                if RefreshFocusConfigUI[barIndex] then RefreshFocusConfigUI[barIndex](true) end
+            end)
+            upBtn:SetPoint("RIGHT", removeBtn, "LEFT", -4, 0)
+        end
+
+        local slotDesc = row:CreateFontString(nil, "OVERLAY")
+        slotDesc:SetFont("Fonts\\FRIZQT__.TTF", 10, "")
+        slotDesc:SetTextColor(UI.textDim[1], UI.textDim[2], UI.textDim[3])
+        slotDesc:SetPoint("LEFT", slotBox, "RIGHT", 8, 0)
+        slotDesc:SetPoint("RIGHT", removeBtn, "LEFT", -56, 0)
+        slotDesc:SetJustifyH("LEFT")
+        slotDesc:SetWordWrap(false)
+        local barNum = math.ceil(slotID / 12)
+        local btnNum = ((slotID - 1) % 12) + 1
+        slotDesc:SetText("Bar " .. barNum .. " Btn " .. btnNum)
+
+        advanceY(28)
+    end
+
+    -- Add slot button (max 8)
+    if #focusCfg.slots < 8 then
+        local addSlotBtn = CreateModernButton(content, "+ Add Slot", 120, 26, function()
+            table.insert(activeFocusProfile[barIndex].slots, 1)
+            PersistActiveFocusProfile(barIndex)
+            BuildFocusRow(barIndex)
+            if RefreshFocusConfigUI[barIndex] then RefreshFocusConfigUI[barIndex](true) end
+        end)
+        placeWidget(addSlotBtn, 26)
+    end
+
+    -- === ACTIONS SECTION ===
+    advanceY(SECTION_SPACING - SPACING)
+    local secActions = CreateSectionHeader(content, "Actions")
+    placeWidget(secActions, 20)
+
+    local resetFocusBtn = CreateModernButton(content, "Reset to Defaults", 160, 30, function()
+        activeFocusProfile[barIndex] = CreateDefaultFocusProfile()
+        currentFocusLayoutName[barIndex] = nil
+        local _, _, lastActiveKey = GetFocusDBTables(barIndex)
+        JarsG13BarsCharDB[lastActiveKey] = nil
+        PersistActiveFocusProfile(barIndex)
+        BuildFocusRow(barIndex)
+        if RefreshFocusConfigUI[barIndex] then RefreshFocusConfigUI[barIndex](true) end
+        print("|cff00ff00Jar's G13 Bars|r: Focus bar " .. barIndex .. " reset to defaults.")
+    end)
+    placeWidget(resetFocusBtn, 30)
+
+    -- Set total content height
+    content:SetHeight(math.abs(yPos) + 20)
+
+    -- Make frame close with Escape
+    tinsert(UISpecialFrames, "JG13_FocusConfigFrame" .. barIndex)
+
+    -- Refresh function
+    RefreshFocusConfigUI[barIndex] = function(rebuild)
+        if rebuild then
+            local wasShown = f:IsShown()
+            local point, rel, relPoint, cx, cy = f:GetPoint(1)
+            local savedScroll = scrollFrame:GetVerticalScroll()
+            f:Hide()
+            focusConfigFrame[barIndex] = nil
+            CreateFocusConfigWindow(barIndex)
+            f = focusConfigFrame[barIndex]
+            if f and point then
+                f:ClearAllPoints()
+                f:SetPoint(point, rel, relPoint, cx, cy)
+            end
+            if wasShown and f then f:Show() end
+            -- Restore scroll position after layout settles
+            C_Timer.After(0, function()
+                if focusConfigFrame[barIndex] then
+                    local sf = focusConfigFrame[barIndex].scrollFrame
+                    if sf then sf:SetVerticalScroll(savedScroll) end
+                end
+            end)
+            return
+        end
+        focusEnableCheck:SetChecked(activeFocusProfile[barIndex].enabled or false)
+        focusSizeSlider.slider:SetValue(activeFocusProfile[barIndex].buttonSize or 40)
+        focusPadSlider.slider:SetValue(activeFocusProfile[barIndex].padding or 4)
+        focusBgSlider.slider:SetValue(activeFocusProfile[barIndex].bgOpacity or 0.3)
+        focusLockCheck:SetChecked(activeFocusProfile[barIndex].locked ~= false)
+        focusNonInterCheck:SetChecked(activeFocusProfile[barIndex].nonInteractive or false)
+        focusCombatCheck:SetChecked(activeFocusProfile[barIndex].combatOnly or false)
+        UpdateOrientBtnColors()
+        nameBox:SetText(currentFocusLayoutName[barIndex] or "")
+        focusLayoutDropdown:GenerateMenu()
+        focusLayoutDropdown:SetDefaultText(currentFocusLayoutName[barIndex] or "Select a focus layout...")
+        UpdateFocusSpecLabel()
+    end
+
+    f:Hide()
+end
+
 -- Slash command
 SLASH_JG131 = "/jg13"
 SLASH_JG132 = "/jg13bind"
 SlashCmdList["JG13"] = function(msg)
-    msg = msg:lower():trim()
+    -- keep the raw text so layout names keep their case
+    local raw = msg:trim()
+    msg = raw:lower()
 
     if msg == "bind" or msg == "keybind" or msg == "kb" then
         if LibKeyBound then
@@ -2273,19 +2851,19 @@ SlashCmdList["JG13"] = function(msg)
     end
 
     if msg:sub(1, 5) == "save " then
-        local name = msg:sub(6):trim()
+        local name = raw:sub(6):trim()
         SaveLayout(name)
         return
     end
 
     if msg:sub(1, 5) == "load " then
-        local name = msg:sub(6):trim()
+        local name = raw:sub(6):trim()
         LoadLayout(name)
         return
     end
 
     if msg:sub(1, 7) == "delete " then
-        local name = msg:sub(8):trim()
+        local name = raw:sub(8):trim()
         DeleteLayout(name)
         return
     end
@@ -2306,4 +2884,9 @@ SlashCmdList["JG13"] = function(msg)
 
     -- Toggle config window
     configFrame:SetShown(not configFrame:IsShown())
+end
+
+-- entry point for JarsAddonConfig
+function JarsG13Bars_OpenConfig()
+    if configFrame then configFrame:Show() end
 end
